@@ -5,7 +5,7 @@ in una dashboard live via Server-Sent Events (SSE).
 Avvio locale:
     pip install -r requirements.txt
     python app.py
-poi apri http://127.0.0.1:5001
+poi apri http://0.0.0.0:5001
 (la porta 5000 su macOS e' usata da AirPlay Receiver; override con PORT=...)
 """
 import json
@@ -56,4 +56,4 @@ if __name__ == "__main__":
     _ensure_mqtt_started()
     # Porta 5000 su macOS e' occupata da "AirPlay Receiver": usiamo 5001.
     port = int(os.environ.get("PORT", 5001))
-    app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
