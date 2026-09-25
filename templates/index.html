@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>Cubetto — riconoscimento rotazione live</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --border: #262b36; --text: #e6e8ec;
+    --muted: #8a90a0; --accent: #4f8cff; --ok: #34c77b; --warn: #f2b84b; --err: #ef5757;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:16px 24px; border-bottom:1px solid var(--border); }
+  header h1 { font-size:18px; margin:0; font-weight:600; }
+  .status { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted); }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); }
+  .dot.ok { background:var(--ok); box-shadow:0 0 8px var(--ok); }
+  .dot.err { background:var(--err); box-shadow:0 0 8px var(--err); }
+  main { padding:24px; display:grid; grid-template-columns: 340px 1fr; gap:24px; max-width:1100px; margin:0 auto; }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:18px; }
+  .panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:0 0 14px; }
+  .faces { display:grid; grid-template-columns: repeat(3,1fr); gap:8px; margin-bottom:18px; }
+  .face { aspect-ratio:1; border-radius:8px; background:#1f2430; border:1px solid var(--border); display:flex; align-items:center; justify-content:center; font-size:20px; font-weight:600; color:var(--muted); transition:all .15s; }
+  .face.touched { background:var(--accent); color:white; border-color:var(--accent); box-shadow:0 0 14px rgba(79,140,255,.5); }
+  .kv { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--border); font-size:14px; }
+  .kv:last-child { border-bottom:none; }
+  .kv .k { color:var(--muted); }
+  .kv .v { font-weight:600; font-variant-numeric: tabular-nums; }
+  .move-badge { display:inline-block; padding:3px 10px; border-radius:999px; background:#26314a; color:#9fc0ff; font-size:12px; font-weight:600; }
+  .move-badge.amb { background:#3a2f1a; color:var(--warn); }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var(--panel); }
+  .logwrap { max-height:520px; overflow-y:auto; }
+  .bad { color:var(--err); }
+  code { background:#1f2430; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🧊 Cubetto — riconoscimento rotazione (live)</h1>
+  <div class="status"><span class="dot" id="dot"></span><span id="status-text">in attesa...</span></div>
+</header>
+<main>
+  <div class="panel">
+    <h2>Facce toccate (bit grezzi)</h2>
+    <div class="faces" id="faces">
+      <div class="face" data-face="0">0</div>
+      <div class="face" data-face="1">1</div>
+      <div class="face" data-face="2">2</div>
+      <div class="face" data-face="3">3</div>
+      <div class="face" data-face="4">4</div>
+      <div class="face" data-face="5">5</div>
+    </div>
+    <div class="kv"><span class="k">bitmask (dec)</span><span class="v" id="bm-dec">—</span></div>
+    <div class="kv"><span class="k">bitmask (bin)</span><span class="v" id="bm-bin">—</span></div>
+    <div class="kv"><span class="k">asse pinzato</span><span class="v" id="axis">—</span></div>
+    <div class="kv"><span class="k">faccia indice</span><span class="v" id="fface">—</span></div>
+    <div class="kv"><span class="k">ultima mossa</span><span class="v" id="move">—</span></div>
+    <div class="kv"><span class="k">distanza</span><span class="v" id="dist">—</span></div>
+    <p id="move-desc" style="color:var(--muted); font-size:13px; margin-top:12px;"></p>
+  </div>
+
+  <div class="panel">
+    <h2>Log eventi (tutti, incluse letture non valide)</h2>
+    <div class="logwrap">
+      <table>
+        <thead><tr><th>ora</th><th>bitmask</th><th>facce</th><th>stato (P,f)</th><th>mossa</th></tr></thead>
+        <tbody id="log"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+<main style="grid-template-columns: 1fr; margin-top:0;">
+  <div class="panel">
+    <h2>Log stati validi (solo letture pinza+1 riconosciute)</h2>
+    <div class="logwrap">
+      <table>
+        <thead><tr><th>ora</th><th>bitmask</th><th>stato (P,f)</th><th>mossa</th><th>distanza</th></tr></thead>
+        <tbody id="log-valid"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script>
+const dot = document.getElementById('dot');
+const statusText = document.getElementById('status-text');
+const log = document.getElementById('log');
+const logValid = document.getElementById('log-valid');
+let rowCount = 0;
+let validRowCount = 0;
+
+function setStatus(ok, text) {
+  dot.className = 'dot ' + (ok ? 'ok' : 'err');
+  statusText.textContent = text;
+}
+
+function updateFaces(faces) {
+  document.querySelectorAll('.face').forEach(el => {
+    const f = parseInt(el.dataset.face, 10);
+    el.classList.toggle('touched', faces.includes(f));
+  });
+}
+
+function addLogRow(d) {
+  const tr = document.createElement('tr');
+  const t = new Date(d.timestamp * 1000).toLocaleTimeString('it-IT', {hour12:false});
+  const stateStr = d.state ? `${d.state[0]}, ${d.state[1]}` : (d.ok ? '—' : '<span class="bad">non valido</span>');
+  tr.innerHTML = `<td>${t}</td><td><code>${d.bitmask_bin ?? ''} (${d.bitmask ?? ''})</code></td>` +
+                 `<td>${(d.faces||[]).join(',')}</td><td>${stateStr}</td>` +
+                 `<td>${d.move ?? (d.ok ? '' : d.reason || '')}</td>`;
+  log.prepend(tr);
+  rowCount++;
+  if (rowCount > 300) { log.lastChild && log.removeChild(log.lastChild); }
+}
+
+// log separato che include SOLO le letture valide (pinza+1 riconosciuta),
+// cioe' d.ok === true e d.state presente (esclude letture invalide/debounce
+// e il messaggio "stato iniziale" viene comunque incluso perche' e' valido).
+function addValidLogRow(d) {
+  const tr = document.createElement('tr');
+  const t = new Date(d.timestamp * 1000).toLocaleTimeString('it-IT', {hour12:false});
+  const moveStr = d.move
+    ? `<span class="move-badge ${d.ambiguous ? 'amb' : ''}">${d.move}</span>`
+    : (d.reason || '—');
+  tr.innerHTML = `<td>${t}</td><td><code>${d.bitmask_bin ?? ''} (${d.bitmask ?? ''})</code></td>` +
+                 `<td>${d.state[0]}, ${d.state[1]}</td><td>${moveStr}</td>` +
+                 `<td>${d.distance ?? 0}</td>`;
+  logValid.prepend(tr);
+  validRowCount++;
+  if (validRowCount > 300) { logValid.lastChild && logValid.removeChild(logValid.lastChild); }
+}
+
+const es = new EventSource('/stream');
+es.onopen = () => setStatus(true, 'connesso allo stream');
+es.onerror = () => setStatus(false, 'stream disconnesso, riconnessione...');
+
+es.onmessage = (e) => {
+  const d = JSON.parse(e.data);
+  if (d.type === 'status') {
+    setStatus(d.status.includes('connesso') && !d.status.includes('dis'), d.status);
+    return;
+  }
+  if (d.type === 'raw_error') {
+    setStatus(false, 'payload non riconosciuto: ' + d.payload);
+    return;
+  }
+  // type === 'event'
+  updateFaces(d.faces || []);
+  document.getElementById('bm-dec').textContent = d.bitmask ?? '—';
+  document.getElementById('bm-bin').textContent = d.bitmask_bin ?? '—';
+  if (d.state) {
+    document.getElementById('axis').textContent = d.state[0];
+    document.getElementById('fface').textContent = d.state[1];
+  }
+  document.getElementById('move').innerHTML = d.move
+    ? `<span class="move-badge ${d.ambiguous ? 'amb' : ''}">${d.move}</span>` : '—';
+  document.getElementById('dist').textContent = d.distance ?? '—';
+  document.getElementById('move-desc').textContent = d.move_desc || (d.ok ? '' : d.reason);
+  addLogRow(d);
+  if (d.ok && d.state) { addValidLogRow(d); }
+};
+</script>
+</body>
+</html>
