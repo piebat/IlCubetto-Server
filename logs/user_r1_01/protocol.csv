@@ -1,0 +1,13 @@
+step,move,start_axis,start_face,expected_axis,expected_index_face,instruction,detected_move,detected_axis,detected_index_face,match
+1,spin+,C,3,C,1,spin about the pinch axis (+ direction),,,,
+2,spin-,C,1,C,3,spin about the pinch axis (- direction),,,,
+3,spin-,C,3,C,2,spin about the pinch axis (- direction),,,,
+4,spin-,C,2,C,0,spin about the pinch axis (- direction),,,,
+5,spin-,C,0,C,1,spin about the pinch axis (- direction),,,,
+6,tip_H,C,1,A,1,tip about the index axis (the index face does not change),,,,
+7,spin+,A,1,A,4,spin about the pinch axis (+ direction),,,,
+8,spin+,A,4,A,2,spin about the pinch axis (+ direction),,,,
+9,spin+,A,2,A,5,spin about the pinch axis (+ direction),,,,
+10,spin+,A,5,A,1,spin about the pinch axis (+ direction),,,,
+11,spin-,A,1,A,5,spin about the pinch axis (- direction),,,,
+12,spin-,A,5,A,2,spin about the pinch axis (- direction),,,,

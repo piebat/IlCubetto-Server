@@ -1,5 +1,5 @@
-"""Semplice pub-sub in-process per inoltrare gli eventi dal client MQTT
-(thread separato) a tutte le connessioni SSE dei browser."""
+"""Simple in-process pub-sub that forwards events from the MQTT client
+(separate thread) to all the browsers' SSE connections."""
 import queue
 import threading
 

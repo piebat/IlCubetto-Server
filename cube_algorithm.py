@@ -1,34 +1,33 @@
 """
-Algoritmo di riconoscimento della rotazione del cubo (presa a 3 dita: pinza su
-una coppia di facce opposte + indice su una faccia dello stesso anello).
+Cube rotation recognition algorithm (3-finger grip: pinch on a pair of
+opposite faces + index finger on a face of the same ring).
 
-Geometria derivata dal dato di chiralita' fornito: il vertice dove si
-incontrano le facce 0,1,4 e' ORARIO visto da fuori.
+Geometry derived from the chirality datum provided: the vertex where faces
+1,0,4 meet (in that order) is CLOCKWISE seen from outside.
 
-Frame di riferimento (fisso rispetto alla MANO, non al cubo): l'asse U e' la
-linea pollice-medio (pinza), l'asse V e' la direzione dell'indice, l'asse W
-e' la direzione perpendicolare (nessun dito la tocca). Tenuti distinti dagli
-assi x,y,z del cubo (FACE_VEC piu' sotto), che sono fissi al corpo del cubo
-e non alla mano.
+Reference frame (fixed with respect to the HAND, not the cube): axis U is the
+thumb-middle finger line (the pinch), axis V is the index finger direction,
+axis W is the perpendicular direction (no finger touches it). Kept distinct
+from the cube's x,y,z axes (FACE_VEC below), which are fixed to the cube's
+body and not to the hand.
 
-Stato osservabile dai sensori: (P, f)
-  P = asse pinzato correntemente ('A'=0-3, 'B'=1-2, 'C'=4-5)
-  f = faccia toccata dall'indice (una delle 4 facce non in P)
-12 stati osservabili in totale.
+State observable from the sensors: (P, f)
+  P = currently pinched axis ('A'=0-3, 'B'=1-2, 'C'=4-5)
+  f = face touched by the index finger (one of the 4 faces not in P)
+12 observable states in total.
 
-Stato interno tracciato dall'algoritmo: uno dei 24 orientamenti propri del
-cubo (matrice di rotazione 3x3 intera). Serve perche' dal solo stato
-osservabile (P,f) la previsione delle mosse e' ambigua (esiste un bit
-"nascosto" — quale delle due facce della pinza sta a +x — che non e'
-misurabile dai sensori ma influenza l'esito di spin/ribaltamenti). Tracciando
-un orientamento specifico e coerente nel tempo (inizializzato in modo
-arbitrario, la posizione iniziale e' indifferente) l'ambiguita' sparisce:
-verificato che ogni stato ha esattamente 5 mosse elementari a 90 gradi
-distinte:
-  spin+  / spin-   : rotazione attorno all'asse di pinza (U)      -> P invariato, f cambia
-  tip_U+ / tip_U-   : rotazione attorno all'asse libero (W)        -> P e f cambiano entrambi
-  tip_H              : rotazione attorno all'asse dell'indice (V)  -> f invariato, P cambia
-                        (le due direzioni +90/-90 producono lo stesso esito osservabile)
+Internal state tracked by the algorithm: one of the cube's 24 proper
+orientations (integer 3x3 rotation matrix). It is needed because from the
+observable state (P,f) alone, move prediction is ambiguous (there is a
+"hidden" bit — which of the two pinched faces is at +x — that the sensors
+cannot measure but which affects the outcome of spins/tips). By tracking a
+specific orientation consistently over time (initialised arbitrarily; the
+starting position does not matter) the ambiguity disappears: it has been
+verified that every state has exactly 5 distinct elementary 90-degree moves:
+  spin+  / spin-   : rotation about the pinch axis (U)        -> P unchanged, f changes
+  tip_U+ / tip_U-   : rotation about the free axis (W)         -> both P and f change
+  tip_H              : rotation about the index axis (V)       -> f unchanged, P changes
+                        (the two directions +90/-90 produce the same observable outcome)
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -38,12 +37,12 @@ import time
 import numpy as np
 
 # ---------------------------------------------------------------------------
-# Geometria del cubo (derivata dalla chiralita' 0-1-4 = oraria vista da fuori)
+# Cube geometry (derived from the chirality 0-1-4 = clockwise seen from outside)
 # ---------------------------------------------------------------------------
 FACE_VEC = {
-    0: (1, 0, 0), 3: (-1, 0, 0),   # asse A
-    1: (0, 1, 0), 2: (0, -1, 0),   # asse B
-    4: (0, 0, -1), 5: (0, 0, 1),   # asse C
+    0: (1, 0, 0), 3: (-1, 0, 0),   # axis A
+    1: (0, 1, 0), 2: (0, -1, 0),   # axis B
+    4: (0, 0, 1), 5: (0, 0, -1),   # axis C
 }
 VEC_FACE = {v: k for k, v in FACE_VEC.items()}
 AXIS_OF = {0: 'A', 3: 'A', 1: 'B', 2: 'B', 4: 'C', 5: 'C'}
@@ -62,21 +61,21 @@ def _rot_w(s):
     return np.array([[0, -s, 0], [s, 0, 0], [0, 0, 1]])
 
 
-# le 6 rotazioni elementari (attorno agli assi mano u,v,w); v+ e v- collassano
-# nello stesso esito osservabile (verificato) quindi le raggruppiamo sotto
-# un'unica etichetta 'tip_H'.
+# the 6 elementary rotations (about the hand axes u,v,w); v+ and v- collapse
+# into the same observable outcome (verified), so they are grouped under a
+# single 'tip_H' label.
 _RAW_ROTATIONS = {
     'spin+': _rot_u(1), 'spin-': _rot_u(-1),
-    'tip_H': _rot_v(1),          # v- darebbe lo stesso risultato osservabile
+    'tip_H': _rot_v(1),          # v- would give the same observable result
     'tip_U+': _rot_w(1), 'tip_U-': _rot_w(-1),
 }
 
 MOVE_DESCRIPTIONS = {
-    'spin+': "spin attorno all'asse di pinza (verso +)",
-    'spin-': "spin attorno all'asse di pinza (verso -)",
-    'tip_H': "ribaltamento sull'asse dell'indice (la faccia indice non cambia)",
-    'tip_U+': "ribaltamento sull'asse libero (verso +)",
-    'tip_U-': "ribaltamento sull'asse libero (verso -)",
+    'spin+': "spin about the pinch axis (+ direction)",
+    'spin-': "spin about the pinch axis (- direction)",
+    'tip_H': "tip about the index axis (the index face does not change)",
+    'tip_U+': "tip about the free axis (+ direction)",
+    'tip_U-': "tip about the free axis (- direction)",
 }
 
 
@@ -86,7 +85,7 @@ def _face_at(M, pos):
 
 
 def observe(M):
-    """Dato un orientamento (matrice 3x3), ritorna lo stato osservabile (P, f)."""
+    """Given an orientation (3x3 matrix), returns the observable state (P, f)."""
     fx_plus = _face_at(M, (1, 0, 0))
     fx_minus = _face_at(M, (-1, 0, 0))
     assert PAIR[fx_plus] == fx_minus
@@ -111,14 +110,14 @@ def _generate_all_orientations():
 
 
 # ---------------------------------------------------------------------------
-# Precomputazione (avviene una sola volta, all'import del modulo)
+# Precomputation (happens once only, when the module is imported)
 # ---------------------------------------------------------------------------
-_ORIENTATIONS = _generate_all_orientations()          # 24 matrici
+_ORIENTATIONS = _generate_all_orientations()          # 24 matrices
 _ORIENT_KEY = lambda M: tuple(map(tuple, M))
 _ID_OF = {_ORIENT_KEY(M): i for i, M in enumerate(_ORIENTATIONS)}
 _OBSERVE_OF = [observe(M) for M in _ORIENTATIONS]      # id -> (P,f)
 
-# per ciascun id, i suoi 5 vicini: move_label -> (neighbor_id, neighbor_state)
+# for each id, its 5 neighbours: move_label -> (neighbor_id, neighbor_state)
 _NEIGHBORS = []
 for M in _ORIENTATIONS:
     nb = {}
@@ -128,7 +127,7 @@ for M in _ORIENTATIONS:
         nb[label] = (nid, _OBSERVE_OF[nid])
     _NEIGHBORS.append(nb)
 
-# mappa stato osservabile -> lista di id compatibili (1 o 2 elementi)
+# maps observable state -> list of compatible ids (1 or 2 elements)
 _STATES_FOR_OBS = {}
 for i, s in enumerate(_OBSERVE_OF):
     _STATES_FOR_OBS.setdefault(s, []).append(i)
@@ -137,7 +136,7 @@ ALL_OBSERVABLE_STATES = sorted(_STATES_FOR_OBS.keys())
 
 
 def _bfs_shortest(start_id):
-    """BFS da un id verso tutti gli altri: ritorna dict id -> (distanza, primo_passo)."""
+    """BFS from one id to all the others: returns dict id -> (distance, first_step)."""
     dist = {start_id: 0}
     first_step = {start_id: None}
     q = deque([start_id])
@@ -160,12 +159,12 @@ for i in range(24):
 
 
 def bitmask_to_faces(bitmask: int) -> set[int]:
-    """bit i (LSB=0) attivo -> faccia i toccata."""
+    """bit i (LSB=0) set -> face i touched."""
     return {i for i in range(6) if (bitmask >> i) & 1}
 
 
 def faces_to_state(touched: set[int]):
-    """Valida 3 facce toccate (coppia opposta + 1) e ritorna (P, f), oppure None se non valido."""
+    """Validates 3 touched faces (opposite pair + 1) and returns (P, f), or None if invalid."""
     if len(touched) != 3:
         return None
     pairs_touched = [f for f in touched if PAIR[f] in touched]
@@ -189,15 +188,16 @@ class Event:
     move_desc: str | None = None
     distance: int = 0
     ambiguous: bool = False
+    alt_moves: list = field(default_factory=list)
     raw_faces: set = field(default_factory=set)
 
 
 class CubeTracker:
-    """Mantiene lo stato interno (uno dei 24 orientamenti) e classifica le
-    transizioni ad ogni nuova lettura valida."""
+    """Keeps the internal state (one of the 24 orientations) and classifies
+    the transitions on every new valid reading."""
 
     def __init__(self):
-        self._id = None  # id dell'orientamento interno corrente (0..23)
+        self._id = None  # id of the current internal orientation (0..23)
 
     @property
     def state(self):
@@ -206,18 +206,43 @@ class CubeTracker:
     def reset(self):
         self._id = None
 
+    def calibrate(self, expected_move: str, previous_state: tuple) -> bool:
+        """Pins down the hidden bit using a move known from outside the sensors.
+
+        The two orientations compatible with the same observable state (P,f)
+        are mirror images: from the wrong one a rotation reads with inverted
+        polarity (tip_U+ as tip_U-, spin+ as spin-; tip_H is self-symmetric
+        and unaffected). The sensors cannot tell the twins apart, but the move
+        the operator was *asked* to perform can: only one twin of
+        ``previous_state`` reaches the currently observed state via
+        ``expected_move``.
+
+        Returns True if the bit could be pinned down, False if the move is
+        uninformative (tip_H) or inconsistent with what was observed -- in
+        which case the caller should leave the tracker alone.
+        """
+        s = self.state
+        if s is None or previous_state is None:
+            return False
+        consistent = [pid for pid in _STATES_FOR_OBS.get(previous_state, [])
+                      if _NEIGHBORS[pid][expected_move][1] == s]
+        if len(consistent) != 1:
+            return False
+        self._id = _NEIGHBORS[consistent[0]][expected_move][0]
+        return True
+
     def update(self, touched_faces: set[int]) -> Event:
         s_new = faces_to_state(touched_faces)
         if s_new is None:
-            return Event(ok=False, reason="lettura non valida (non e' pinza+1)", raw_faces=touched_faces)
+            return Event(ok=False, reason="invalid reading (not pinch+1)", raw_faces=touched_faces)
 
         if self._id is None:
-            # prima lettura: nessun riferimento -> l'orientamento nascosto e'
-            # scelto arbitrariamente (indifferente, come la posizione iniziale)
+            # first reading: no reference -> the hidden orientation is chosen
+            # arbitrarily (it does not matter, like the starting position)
             self._id = _STATES_FOR_OBS[s_new][0]
-            return Event(ok=True, reason="stato iniziale", state=s_new, raw_faces=touched_faces)
+            return Event(ok=True, reason="initial state", state=s_new, raw_faces=touched_faces)
 
-        # 1) prova match diretto fra i 5 vicini elementari
+        # 1) try a direct match among the 5 elementary neighbours
         for label, (nid, nstate) in _NEIGHBORS[self._id].items():
             if nstate == s_new:
                 self._id = nid
@@ -226,10 +251,10 @@ class CubeTracker:
                              raw_faces=touched_faces)
 
         if s_new == _OBSERVE_OF[self._id]:
-            return Event(ok=True, state=s_new, move=None, move_desc="nessun movimento",
+            return Event(ok=True, state=s_new, move=None, move_desc="no movement",
                          distance=0, raw_faces=touched_faces)
 
-        # 2) piu' di una rotazione elementare tra due letture: BFS precalcolato
+        # 2) more than one elementary rotation between two readings: precomputed BFS
         candidates = _STATES_FOR_OBS[s_new]
         best_dist = None
         best_targets = []
@@ -243,11 +268,27 @@ class CubeTracker:
             elif d == best_dist:
                 best_targets.append(cid)
 
-        ambiguous = len(best_targets) > 1
+        # all the initial moves compatible with a shortest path towards ANY
+        # of the best_targets (not just the first one chosen arbitrarily):
+        # this also captures the "same target, different first step"
+        # ambiguity that comparing best_targets alone would miss.
+        alt_moves = []
+        for label, (nid, _) in _NEIGHBORS[self._id].items():
+            for tgt in best_targets:
+                d2 = _ALL_PAIRS_DIST[nid].get(tgt)
+                if d2 is not None and 1 + d2 == best_dist:
+                    alt_moves.append(label)
+                    break
+        alt_moves = sorted(set(alt_moves))
+
+        ambiguous = len(best_targets) > 1 or len(alt_moves) > 1
         chosen = best_targets[0]
-        first_move = _ALL_PAIRS_FIRSTSTEP[self._id].get(chosen)
+        first_move = alt_moves[0] if alt_moves else _ALL_PAIRS_FIRSTSTEP[self._id].get(chosen)
         self._id = chosen
+        alt_desc = ", ".join(alt_moves) if len(alt_moves) > 1 else MOVE_DESCRIPTIONS.get(first_move, '?')
         return Event(ok=True, state=s_new, move=first_move,
-                     move_desc=f"salto multiplo ({best_dist} mosse, primo passo: "
-                               f"{MOVE_DESCRIPTIONS.get(first_move, '?')})",
-                     distance=best_dist or 0, ambiguous=ambiguous, raw_faces=touched_faces)
+                     move_desc=f"multiple jump ({best_dist} moves); first move: {alt_desc}"
+                               + (" -- AMBIGUOUS, they cannot be told apart from touch data alone"
+                                  if ambiguous else ""),
+                     distance=best_dist or 0, ambiguous=ambiguous, alt_moves=alt_moves,
+                     raw_faces=touched_faces)

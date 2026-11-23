@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cubetto — state graph G (3D)</title>
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f5f6f8; --border: #d8dce4; --text: #1b1f27;
+    --muted: #6b7280; --accent: #2563eb; --ok: #15905a; --warn: #b8791b; --err: #d13b3b;
+  }
+  * { box-sizing: border-box; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family: -apple-system, "Segoe UI", Roboto, sans-serif; display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 24px; border-bottom:1px solid var(--border); flex:0 0 auto; }
+  header h1 { font-size:18px; margin:0; font-weight:600; }
+  header a { color:var(--accent); font-size:13px; text-decoration:none; }
+  header a:hover { text-decoration:underline; }
+  .wrap { flex:1 1 auto; position:relative; min-height:0; }
+  #graph { position:absolute; inset:0; }
+  .overlay { position:absolute; top:16px; left:16px; width:280px; background:rgba(255,255,255,.92); box-shadow:0 2px 10px rgba(15,23,42,.08); border:1px solid var(--border); border-radius:10px; padding:16px; backdrop-filter: blur(6px); max-height: calc(100% - 32px); overflow-y:auto; }
+  .overlay h2 { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:0 0 12px; }
+  .overlay h2:not(:first-child) { margin-top:18px; }
+  .legend-row { display:flex; align-items:center; gap:9px; font-size:13px; padding:4px 0; cursor:pointer; user-select:none; }
+  .legend-row.off { opacity:.35; }
+  .swatch { width:22px; height:0; border-top-width:3px; border-top-style:solid; border-radius:2px; flex:0 0 auto; }
+  .legend-row .desc { color:var(--muted); font-size:11px; }
+  .kv { display:flex; justify-content:space-between; gap:8px; padding:5px 0; border-bottom:1px solid var(--border); font-size:13px; }
+  .kv:last-child { border-bottom:none; }
+  .kv .k { color:var(--muted); }
+  .kv .v { font-weight:600; font-variant-numeric: tabular-nums; text-align:right; }
+  .hint { color:var(--muted); font-size:11.5px; line-height:1.5; margin:12px 0 0; }
+  .hint.off { opacity:.55; }
+  code { background:#eef1f6; padding:1px 5px; border-radius:4px; font-size:11px; }
+  .sel { background:#ffffff; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:3px 6px; font-size:12.5px; font-family:inherit; max-width:130px; }
+  .sel:focus { outline:none; border-color:var(--accent); }
+  input[type=checkbox] { accent-color:var(--accent); width:15px; height:15px; }
+  .isolated-badge { display:inline-block; margin-left:6px; padding:1px 7px; border-radius:999px; background:#dce7ff; color:#1d4ed8; font-size:11px; font-weight:600; }
+  button.ctl { width:100%; margin-top:8px; padding:7px 10px; font-size:12.5px; background:#f2f4f8; color:var(--text); border:1px solid var(--border); border-radius:7px; cursor:pointer; font-family:inherit; }
+  button.ctl:hover { border-color:var(--accent); color:var(--accent); }
+  .status { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted); }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); }
+  .dot.ok { background:var(--ok); box-shadow:0 0 8px var(--ok); }
+  .dot.err { background:var(--err); box-shadow:0 0 8px var(--err); }
+  #err { position:absolute; inset:0; display:none; align-items:center; justify-content:center; text-align:center; padding:40px; color:var(--muted); font-size:14px; line-height:1.6; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🧊 Cube state graph G — 24 nodes, 5-regular</h1>
+  <div class="status">
+    <a href="/">← live dashboard</a>
+    <span class="dot" id="dot"></span><span id="status-text">loading graph...</span>
+  </div>
+</header>
+<div class="wrap">
+  <div id="graph"></div>
+  <div id="err"></div>
+  <div class="overlay">
+    <h2>Moves (click to filter)</h2>
+    <div id="legend"></div>
+
+    <h2>Selected node</h2>
+    <div class="kv"><span class="k">id</span><span class="v" id="n-id">—</span></div>
+    <div class="kv"><span class="k">pinched axis</span><span class="v" id="n-axis">—</span></div>
+    <div class="kv"><span class="k">index face</span><span class="v" id="n-face">—</span></div>
+    <div class="kv"><span class="k">hidden bit</span><span class="v" id="n-bit">—</span></div>
+
+    <h2>Isolate a node</h2>
+    <div class="kv">
+      <span class="k">starting node</span>
+      <select class="sel" id="sel-node"><option value="">— none —</option></select>
+    </div>
+    <div class="kv">
+      <span class="k">depth (moves)</span>
+      <select class="sel" id="sel-depth">
+        <option value="1">1</option>
+        <option value="2">2</option>
+        <option value="3">3</option>
+      </select>
+    </div>
+    <label class="kv" for="chk-directed" style="cursor:pointer;">
+      <span class="k">outgoing edges only</span>
+      <input type="checkbox" id="chk-directed">
+    </label>
+    <button class="ctl" id="btn-isolate">Isolate the selected node</button>
+    <p class="hint" id="isolate-box">
+      Shows only the chosen node and the states reachable within the given
+      number of moves. With <em>outgoing edges only</em>, moves are followed
+      in the direction in which they are performed.
+    </p>
+
+    <h2>View</h2>
+    <label class="kv" for="chk-labels" style="cursor:pointer;">
+      <span class="k">node names</span>
+      <input type="checkbox" id="chk-labels" checked>
+    </label>
+    <button class="ctl" id="btn-fit">Recentre the view</button>
+    <button class="ctl" id="btn-spin">Auto-rotation: ON</button>
+    <p class="hint">
+      Drag to rotate, scroll wheel to zoom, right button to pan. Hover over a
+      node to highlight its neighbours, click to centre it and pick it as the
+      starting node. The label on the node is the observable state plus the
+      <em>hidden bit</em> (e.g. <code>A,1 #0</code>): the two nodes with the
+      same state (P,f) share a colour and differ only by that bit.
+    </p>
+  </div>
+</div>
+
+<!-- three-spritetext expects a global THREE: the 3d-force-graph bundle only
+     includes a subset of three.js and does NOT expose it, so three.js must be
+     loaded first in its UMD build (r155 is the last one with
+     build/three.min.js). -->
+<script src="https://unpkg.com/three@0.155.0/build/three.min.js"></script>
+<script src="https://unpkg.com/three-spritetext@1.8.2/dist/three-spritetext.min.js"></script>
+<script src="https://unpkg.com/3d-force-graph@1.73.4/dist/3d-force-graph.min.js"></script>
+<script>
+// colours chosen to stay legible on a white background
+const MOVE_COLORS = {
+  'spin+':  '#1d4ed8',
+  'spin-':  '#60a5fa',
+  'tip_U+': '#b45309',
+  'tip_U-': '#f59e0b',
+  'tip_H':  '#15803d',
+};
+const MOVE_ORDER = ['spin+', 'spin-', 'tip_U+', 'tip_U-', 'tip_H'];
+
+// palette for the 12 observable states (P,f): the two ids sharing the same
+// observable state get the same colour, so the "hidden" pairs can be told
+// apart at a glance.
+const GROUP_COLORS = [
+  '#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed', '#0891b2',
+  '#db2777', '#4d7c0f', '#ea580c', '#0284c7', '#9333ea', '#0d9488',
+];
+// highlight colour (hover / isolation root): on a white background, white
+// would disappear, so a soft black is used instead.
+const HIGHLIGHT_COLOR = '#111827';
+
+const dot = document.getElementById('dot');
+const statusText = document.getElementById('status-text');
+function setStatus(ok, text) {
+  dot.className = 'dot ' + (ok ? 'ok' : 'err');
+  statusText.textContent = text;
+}
+
+const activeMoves = new Set(MOVE_ORDER);
+let Graph = null;
+let highlightNodes = new Set();
+let highlightLinks = new Set();
+let allNodes = [];
+let allLinks = [];
+let spinning = true;
+let showLabels = true;
+// SpriteText depends on a global THREE: if either script fails to load, the
+// graph is still drawn, just without the node names.
+const labelsAvailable = (typeof SpriteText === 'function');
+
+// --- "isolate" mode: show only a chosen node and its neighbourhood ---
+// isolatedId = id of the starting node (null = full graph)
+// isolateDepth = how many moves of distance to include (1 = direct neighbours)
+// isolateDirected = true -> follows outgoing edges only (reachable states),
+//                   false -> follows edges in both directions.
+let isolatedId = null;
+let isolateDepth = 1;
+let isolateDirected = false;
+
+function endpointId(x) { return (x && typeof x === 'object') ? x.id : x; }
+
+/** Name shown on the node: observable state + hidden bit, e.g. "A,1 #0".
+ *  It is the paper's readable identifier; the numeric id stays in the tooltip. */
+function nodeName(n) { return `${n.state} #${n.hidden_bit}`; }
+
+/** Node size: larger if it is the isolation root or if it is highlighted by
+ *  hovering. */
+function nodeVal(n) { return n.id === isolatedId ? 12 : (highlightNodes.has(n) ? 9 : 5); }
+
+// 3d-force-graph makes the sphere's volume proportional to nodeVal
+// (radius = cbrt(val) * 4): the largest possible radius (val = 12) is needed
+// here to keep the label just above the sphere, even when enlarged.
+const MAX_NODE_RADIUS = Math.cbrt(12) * 4;
+
+function linkVisible(l) { return activeMoves.has(l.move); }
+
+/** Set of ids reachable from `startId` within `depth` edges, using only the
+ *  active moves. BFS over the filtered graph. */
+function neighborhoodIds(startId, depth) {
+  const keep = new Set([startId]);
+  let frontier = [startId];
+  for (let d = 0; d < depth; d++) {
+    const next = [];
+    for (const cur of frontier) {
+      for (const l of allLinks) {
+        if (!linkVisible(l)) continue;
+        const s = endpointId(l.source), t = endpointId(l.target);
+        let other = null;
+        if (s === cur) other = t;
+        else if (!isolateDirected && t === cur) other = s;
+        if (other !== null && !keep.has(other)) { keep.add(other); next.push(other); }
+      }
+    }
+    frontier = next;
+    if (!frontier.length) break;
+  }
+  return keep;
+}
+
+/** Recomputes the data passed to the graph, applying the move filter + isolation. */
+function refreshGraphData() {
+  let nodes = allNodes;
+  let links = allLinks.filter(linkVisible);
+
+  if (isolatedId !== null) {
+    const keep = neighborhoodIds(isolatedId, isolateDepth);
+    nodes = allNodes.filter(n => keep.has(n.id));
+    // only the edges internal to the induced subgraph are kept
+    links = links.filter(l => keep.has(endpointId(l.source)) && keep.has(endpointId(l.target)));
+  }
+
+  Graph.graphData({ nodes, links });
+  updateIsolateUI(nodes.length, links.length);
+}
+
+function updateIsolateUI(nodeCount, linkCount) {
+  const box = document.getElementById('isolate-box');
+  const btn = document.getElementById('btn-isolate');
+  if (isolatedId === null) {
+    box.classList.add('off');
+    btn.textContent = 'Isolate the selected node';
+    setStatus(true, `${allNodes.length} nodes · ${allLinks.filter(linkVisible).length} edges`);
+  } else {
+    box.classList.remove('off');
+    btn.textContent = 'Show the whole graph';
+    setStatus(true, `isolated node ${isolatedId} · ${nodeCount} nodes · ${linkCount} edges`);
+  }
+}
+
+function buildLegend(moveDescriptions) {
+  const legend = document.getElementById('legend');
+  MOVE_ORDER.forEach(move => {
+    const row = document.createElement('div');
+    row.className = 'legend-row';
+    row.innerHTML = `<span class="swatch" style="border-top-color:${MOVE_COLORS[move]}; ` +
+      `border-top-style:${move.endsWith('-') ? 'dashed' : 'solid'}"></span>` +
+      `<span><strong>${move}</strong><br><span class="desc">${moveDescriptions[move] || ''}</span></span>`;
+    row.onclick = () => {
+      if (activeMoves.has(move)) { activeMoves.delete(move); } else { activeMoves.add(move); }
+      row.classList.toggle('off', !activeMoves.has(move));
+      // the link set is rebuilt rather than merely hidden, so the layout
+      // forces take the filter into account too.
+      refreshGraphData();
+    };
+    legend.appendChild(row);
+  });
+}
+
+function buildNodeSelect(nodes) {
+  const sel = document.getElementById('sel-node');
+  nodes.slice().sort((a, b) => a.id - b.id).forEach(n => {
+    const opt = document.createElement('option');
+    opt.value = String(n.id);
+    opt.textContent = `${n.id} — ${n.state} #${n.hidden_bit}`;
+    sel.appendChild(opt);
+  });
+}
+
+function showNodeInfo(node) {
+  document.getElementById('n-id').textContent = node ? node.id : '—';
+  document.getElementById('n-axis').textContent = node ? node.axis : '—';
+  document.getElementById('n-face').textContent = node ? node.face : '—';
+  document.getElementById('n-bit').textContent = node ? node.hidden_bit : '—';
+}
+
+fetch('/graph-data')
+  .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+  .then(data => {
+    if (typeof ForceGraph3D !== 'function') { throw new Error('library-not-loaded'); }
+    allNodes = data.nodes;
+    allLinks = data.links;
+    buildLegend(data.move_descriptions || {});
+    buildNodeSelect(data.nodes);
+    setStatus(true, `${data.nodes.length} nodes · ${data.links.length} edges`);
+
+    Graph = ForceGraph3D()(document.getElementById('graph'))
+      .backgroundColor('#ffffff')
+      .graphData({ nodes: data.nodes, links: data.links.filter(linkVisible) })
+      .nodeLabel(n => `<div style="background:#ffffff;border:1px solid #d8dce4;border-radius:6px;` +
+                      `box-shadow:0 2px 8px rgba(15,23,42,.12);` +
+                      `padding:6px 9px;font:12px -apple-system,sans-serif;color:#1b1f27">` +
+                      `<strong>id ${n.id}</strong> — state (${n.state})<br>` +
+                      `<span style="color:#6b7280">hidden bit ${n.hidden_bit}</span></div>`)
+      .nodeVal(nodeVal)
+      .nodeColor(n => {
+        const base = GROUP_COLORS[n.group % GROUP_COLORS.length];
+        // in isolate mode, the root stays dark to tell it apart
+        if (n.id === isolatedId) return HIGHLIGHT_COLOR;
+        if (highlightNodes.size === 0) return base;
+        return highlightNodes.has(n) ? HIGHLIGHT_COLOR : base;
+      })
+      .nodeOpacity(0.95)
+      .nodeResolution(16)
+      // label always visible next to the sphere: a group (sphere +
+      // SpriteText) is built instead of replacing the node, so the clickable
+      // spherical geometry and the colour/radius computed above are kept.
+      .nodeThreeObjectExtend(true)
+      .nodeThreeObject(n => {
+        // if the label library is unavailable only the text is given up:
+        // the graph must be drawn regardless.
+        if (!showLabels || !labelsAvailable) return null;
+        const sprite = new SpriteText(nodeName(n));
+        sprite.color = n.id === isolatedId ? '#000000' : '#374151';
+        sprite.textHeight = 3.2;
+        sprite.fontWeight = '600';
+        // semi-transparent background to stay legible over the edges
+        sprite.backgroundColor = 'rgba(255,255,255,.78)';
+        sprite.padding = 1.2;
+        sprite.borderRadius = 2;
+        // Moved above the sphere so as not to cover it. The offset is based
+        // on the largest radius the node can take (hover/isolation grow the
+        // sphere but the sprite is not rebuilt): this way the label never
+        // ends up inside the enlarged sphere.
+        sprite.position.set(0, MAX_NODE_RADIUS + 2.6, 0);
+        return sprite;
+      })
+      .linkColor(l => highlightLinks.size && !highlightLinks.has(l)
+        ? 'rgba(120,128,145,.18)' : MOVE_COLORS[l.move])
+      .linkOpacity(0.7)
+      .linkWidth(l => highlightLinks.has(l) ? 2.4 : 0.6)
+      .linkDirectionalArrowLength(3.5)
+      .linkDirectionalArrowRelPos(1)
+      .linkDirectionalArrowColor(l => MOVE_COLORS[l.move])
+      // parallel edges / self-loops are separated by curving them differently
+      .linkCurvature(l => l.self_loop ? 0.6 : 0.12 + 0.14 * (l.curvature_idx || 0))
+      .linkLabel(l => `<div style="background:#ffffff;border:1px solid #d8dce4;border-radius:6px;` +
+                      `box-shadow:0 2px 8px rgba(15,23,42,.12);` +
+                      `padding:5px 8px;font:12px -apple-system,sans-serif;color:#1b1f27">` +
+                      `<strong style="color:${MOVE_COLORS[l.move]}">${l.move}</strong>: ` +
+                      `${l.source.id ?? l.source} → ${l.target.id ?? l.target}</div>`)
+      .onNodeHover(node => {
+        highlightNodes.clear();
+        highlightLinks.clear();
+        if (node) {
+          highlightNodes.add(node);
+          Graph.graphData().links.forEach(l => {
+            if (l.source === node || l.target === node) {
+              highlightLinks.add(l);
+              highlightNodes.add(l.source === node ? l.target : l.source);
+            }
+          });
+        }
+        showNodeInfo(node);
+        // refresh only the accessors that depend on the highlighting
+        Graph.nodeColor(Graph.nodeColor())
+             .nodeVal(Graph.nodeVal())
+             .linkColor(Graph.linkColor())
+             .linkWidth(Graph.linkWidth());
+        document.getElementById('graph').style.cursor = node ? 'pointer' : null;
+      })
+      .onNodeClick(node => {
+        // the automatic orbit would immediately overwrite the camera: stop it
+        spinning = false;
+        orbitReady = false;
+        const btn = document.getElementById('btn-spin');
+        if (btn) btn.textContent = 'Auto-rotation: OFF';
+        // the click also picks the starting node for "isolate" mode
+        // (without isolating it: just press the button afterwards)
+        const selN = document.getElementById('sel-node');
+        if (selN && isolatedId === null) selN.value = String(node.id);
+        // move the camera closer to the node, keeping the current distance
+        const dist = 90;
+        const ratio = 1 + dist / Math.hypot(node.x, node.y, node.z || 1);
+        Graph.cameraPosition(
+          { x: node.x * ratio, y: node.y * ratio, z: node.z * ratio },
+          node, 900,
+        );
+      });
+
+    Graph.d3Force('charge').strength(-160);
+    Graph.d3Force('link').distance(48);
+
+    // Slow automatic camera rotation until the user stops it. The orbit
+    // radius is not fixed: it is taken from the camera's current distance,
+    // otherwise the orbit would override the initial zoomToFit (which runs at
+    // ~900ms) and push the graph off-centre again.
+    let angle = 0;
+    let orbitRadius = 320;
+    let orbitReady = false;
+
+    function startOrbit() {
+      const p = Graph.cameraPosition();
+      orbitRadius = Math.hypot(p.x, p.z) || 320;
+      angle = Math.atan2(p.x, p.z);   // resumes from the current angle, without jumps
+      orbitReady = true;
+    }
+
+    setInterval(() => {
+      if (!spinning || !orbitReady) return;
+      angle += Math.PI / 1400;
+      Graph.cameraPosition({
+        x: orbitRadius * Math.sin(angle),
+        z: orbitRadius * Math.cos(angle),
+      });
+    }, 30);
+
+    // --- "isolate" mode controls ---
+    const selNode = document.getElementById('sel-node');
+    const selDepth = document.getElementById('sel-depth');
+    const chkDirected = document.getElementById('chk-directed');
+    const btnIsolate = document.getElementById('btn-isolate');
+
+    function applyIsolation(id) {
+      isolatedId = id;
+      refreshGraphData();
+      // the subgraph is small: reframe it to fill the view
+      orbitReady = false;
+      setTimeout(() => { Graph.zoomToFit(700, 60); setTimeout(startOrbit, 800); }, 300);
+    }
+
+    btnIsolate.onclick = () => {
+      if (isolatedId !== null) {          // already isolated -> back to the whole graph
+        selNode.value = '';
+        applyIsolation(null);
+        return;
+      }
+      if (selNode.value === '') {
+        setStatus(false, 'pick a starting node first');
+        return;
+      }
+      applyIsolation(parseInt(selNode.value, 10));
+    };
+
+    // changing node/depth/direction while isolated re-applies immediately
+    selNode.onchange = () => {
+      if (selNode.value === '') { applyIsolation(null); return; }
+      applyIsolation(parseInt(selNode.value, 10));
+    };
+    selDepth.onchange = () => {
+      isolateDepth = parseInt(selDepth.value, 10);
+      if (isolatedId !== null) applyIsolation(isolatedId);
+    };
+    chkDirected.onchange = () => {
+      isolateDirected = chkDirected.checked;
+      if (isolatedId !== null) applyIsolation(isolatedId);
+    };
+
+    const btnSpin = document.getElementById('btn-spin');
+    btnSpin.onclick = () => {
+      spinning = !spinning;
+      // when restarting, the orbit resumes from the camera's current position
+      if (spinning) startOrbit();
+      btnSpin.textContent = 'Auto-rotation: ' + (spinning ? 'ON' : 'OFF');
+    };
+    const chkLabels = document.getElementById('chk-labels');
+    if (!labelsAvailable) {
+      chkLabels.checked = false;
+      chkLabels.disabled = true;
+      chkLabels.parentElement.title = 'label library not loaded';
+      chkLabels.parentElement.style.opacity = '.5';
+    }
+    chkLabels.onchange = (ev) => {
+      showLabels = ev.target.checked;
+      // force the nodes' 3D objects to be rebuilt
+      Graph.nodeThreeObject(Graph.nodeThreeObject());
+    };
+
+    document.getElementById('btn-fit').onclick = () => {
+      orbitReady = false;               // let the fit animation finish
+      Graph.zoomToFit(700, 40);
+      setTimeout(startOrbit, 800);
+    };
+
+    // the automatic rotation fights with dragging: it stops at the user's
+    // first gesture on the scene.
+    document.getElementById('graph').addEventListener('pointerdown', () => {
+      if (spinning) { spinning = false; btnSpin.textContent = 'Auto-rotation: OFF'; }
+    });
+
+    window.addEventListener('resize', () => {
+      const el = document.getElementById('graph');
+      Graph.width(el.clientWidth).height(el.clientHeight);
+    });
+    // first framing, then (once the fit is done) the automatic orbit starts
+    setTimeout(() => {
+      Graph.zoomToFit(700, 40);
+      setTimeout(startOrbit, 800);
+    }, 900);
+  })
+  .catch(e => {
+    setStatus(false, 'loading error');
+    const err = document.getElementById('err');
+    err.style.display = 'flex';
+    err.innerHTML = e.message === 'library-not-loaded'
+      ? 'Could not load <code>3d-force-graph</code> from the CDN (unpkg.com).<br>' +
+        'An internet connection is required, or download the library into <code>static/</code> ' +
+        'and change the <code>&lt;script&gt;</code> tag in <code>templates/graph.html</code>.'
+      : 'Error fetching <code>/graph-data</code>: ' + e.message;
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+step,move,start_axis,start_face,expected_axis,expected_index_face,instruction,detected_move,detected_axis,detected_index_face,match
+1,tip_U+,A,1,B,0,tip about the free axis (+ direction),tip_U+,B,0,OK
+2,spin+,B,0,B,5,spin about the pinch axis (+ direction),spin-,B,4,MISMATCH
+3,spin+,B,5,B,3,spin about the pinch axis (+ direction),spin-,B,0,MISMATCH
+4,spin+,B,3,B,4,spin about the pinch axis (+ direction),spin+,B,4,OK
+5,spin+,B,4,B,0,spin about the pinch axis (+ direction),spin+,B,0,OK
+6,spin-,B,0,B,4,spin about the pinch axis (- direction),spin-,B,4,OK
+7,spin-,B,4,B,3,spin about the pinch axis (- direction),spin-,B,3,OK
+8,spin-,B,3,B,5,spin about the pinch axis (- direction),spin+,B,4,MISMATCH
+9,spin-,B,5,B,0,spin about the pinch axis (- direction),spin-,B,0,OK
+10,tip_H,B,0,C,0,tip about the index axis (the index face does not change),tip_H,C,0,OK
+11,tip_H,C,0,B,0,tip about the index axis (the index face does not change),spin+,C,2,MISMATCH
+12,spin+,B,0,B,4,spin about the pinch axis (+ direction),spin-,B,5,MISMATCH

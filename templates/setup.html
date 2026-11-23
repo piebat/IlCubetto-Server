@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cubetto — new test session</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --border: #262b36; --text: #e6e8ec;
+    --muted: #8a90a0; --accent: #4f8cff;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width:480px; margin:60px auto; padding:0 24px; }
+  h1 { font-size:20px; margin:0 0 6px; }
+  .sub { color:var(--muted); font-size:14px; margin:0 0 24px; }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:24px; }
+  .badge { display:inline-block; padding:3px 10px; border-radius:999px; background:#26314a; color:#9fc0ff; font-size:13px; font-weight:600; margin-bottom:18px; }
+  label { display:block; font-size:13px; color:var(--muted); margin:16px 0 6px; }
+  input, select, textarea { width:100%; padding:9px 11px; font-size:14px; background:#1f2430; color:var(--text); border:1px solid var(--border); border-radius:8px; font-family:inherit; }
+  textarea { resize:vertical; min-height:70px; }
+  button { margin-top:22px; width:100%; padding:11px; font-size:14.5px; font-weight:600; background:var(--accent); color:#fff; border:none; border-radius:8px; cursor:pointer; }
+  button:hover { filter:brightness(1.1); }
+</style>
+</head>
+<body>
+<main>
+  <h1>🧊 New test session</h1>
+  <p class="sub">Each tester performs 12 moves; 10 testers cover all 120 combinations.</p>
+  <div class="panel">
+    <span class="badge">next: {{ user_id }} (round {{ round }}, slot {{ slot + 1 }}/10)</span>
+    <form method="post" action="/session/new">
+      <label for="age">Age</label>
+      <input type="number" id="age" name="age" min="0" max="120">
+
+      <label for="gender">Gender</label>
+      <select id="gender" name="gender">
+        <option value="">— not specified —</option>
+        <option value="F">Female</option>
+        <option value="M">Male</option>
+        <option value="other">Other</option>
+      </select>
+
+      <label for="notes">Notes (optional)</label>
+      <textarea id="notes" name="notes" placeholder="any relevant remarks about this tester or session"></textarea>
+
+      <button type="submit">Start test session →</button>
+    </form>
+  </div>
+</main>
+</body>
+</html>

@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="it">
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Cubetto — riconoscimento rotazione live</title>
+<title>Cubetto — live rotation recognition</title>
 <style>
   :root {
     --bg: #0f1115; --panel: #171a21; --border: #262b36; --text: #e6e8ec;
@@ -34,16 +34,88 @@
   .logwrap { max-height:520px; overflow-y:auto; }
   .bad { color:var(--err); }
   code { background:#1f2430; padding:1px 5px; border-radius:4px; }
+
+  /* --- test protocol panel --- */
+  .test { max-width:1100px; margin:24px auto 0; padding:0 24px; }
+  .test .panel { border-color:var(--accent); }
+  .test-head { display:flex; align-items:baseline; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+  .step-num { font-size:13px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .todo { margin:14px 0 4px; padding:18px; background:#1f2430; border:1px solid var(--border); border-radius:10px; }
+  .todo .mv { display:inline-block; padding:5px 14px; border-radius:999px; background:#26314a; color:#9fc0ff; font-size:19px; font-weight:700; letter-spacing:.02em; }
+  .todo .instr { font-size:15px; margin:12px 0 0; line-height:1.5; }
+  .todo .exp { color:var(--muted); font-size:13px; margin:10px 0 0; }
+  .todo .exp b { color:var(--text); font-variant-numeric:tabular-nums; }
+  .todo.done-all { border-color:var(--ok); }
+  .bar { height:8px; border-radius:999px; background:#1f2430; overflow:hidden; margin:14px 0 6px; }
+  .bar > i { display:block; height:100%; width:0; background:var(--accent); transition:width .3s; }
+  .counts { display:flex; gap:18px; font-size:13px; color:var(--muted); flex-wrap:wrap; }
+  .counts b { font-variant-numeric:tabular-nums; }
+  .counts .c-ok b { color:var(--ok); }
+  .counts .c-ko b { color:var(--err); }
+  .btns { display:flex; gap:10px; margin-top:16px; flex-wrap:wrap; }
+  .btns button { padding:9px 16px; font-size:13.5px; font-weight:600; background:#1f2430; color:var(--text); border:1px solid var(--border); border-radius:8px; cursor:pointer; font-family:inherit; }
+  .btns button:hover { border-color:var(--accent); color:#9fc0ff; }
+  .btns button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .btns button.primary:hover { filter:brightness(1.1); color:#fff; }
+  .btns button.danger:hover { border-color:var(--err); color:var(--err); }
+  .paused-badge { display:none; padding:3px 10px; border-radius:999px; background:#3a2f1a; color:var(--warn); font-size:12px; font-weight:700; }
+  body.paused .paused-badge { display:inline-block; }
+  body.paused .todo { opacity:.5; }
+  .last { font-size:12.5px; color:var(--muted); margin:10px 0 0; min-height:1.2em; }
+  .last .ok { color:var(--ok); font-weight:600; }
+  .last .ko { color:var(--err); font-weight:600; }
+  .todo.calibrating { border-color:var(--warn); }
+  .todo.calibrating .mv { background:#3a2f1a; color:var(--warn); }
+  .user-badge { font-size:12.5px; color:var(--muted); }
+  .user-badge b { color:var(--text); }
 </style>
 </head>
 <body>
 <header>
-  <h1>🧊 Cubetto — riconoscimento rotazione (live)</h1>
-  <div class="status"><span class="dot" id="dot"></span><span id="status-text">in attesa...</span></div>
+  <h1>🧊 Cubetto — rotation recognition (live)</h1>
+  <div class="status">
+    <span class="user-badge">tester <b>{{ meta.user_id }}</b> · round {{ meta.round }} · age {{ meta.age or '—' }} · {{ meta.gender or '—' }}</span>
+    <a href="/setup" style="color:var(--accent); text-decoration:none;">new test / switch user</a>
+    <a href="/graph" style="color:var(--accent); text-decoration:none;">3D state graph →</a>
+    <span class="dot" id="dot"></span><span id="status-text">waiting...</span>
+  </div>
 </header>
+
+<section class="test">
+  <div class="panel">
+    <div class="test-head">
+      <h2 style="margin:0">Test protocol — manipulation to perform
+        <span class="paused-badge" id="paused-badge">PAUSED</span>
+      </h2>
+      <span class="step-num" id="step-num">— / —</span>
+    </div>
+
+    <div class="todo" id="todo">
+      <span class="mv" id="todo-move">waiting…</span>
+      <p class="instr" id="todo-instr">Loading the protocol…</p>
+      <p class="exp" id="todo-exp"></p>
+    </div>
+
+    <div class="bar"><i id="bar-fill"></i></div>
+    <div class="counts">
+      <span>completed <b id="c-done">0</b></span>
+      <span class="c-ok">correct <b id="c-ok">0</b></span>
+      <span class="c-ko">wrong <b id="c-ko">0</b></span>
+      <span>log <b id="c-log">—</b></span>
+    </div>
+    <p class="last" id="last-result"></p>
+
+    <div class="btns">
+      <button class="primary" id="btn-pause">⏸ Pause</button>
+      <button id="btn-redo">↩ Redo this step</button>
+      <button class="danger" id="btn-reset">⟲ Reset the test</button>
+    </div>
+  </div>
+</section>
+
 <main>
   <div class="panel">
-    <h2>Facce toccate (bit grezzi)</h2>
+    <h2>Touched faces (raw bits)</h2>
     <div class="faces" id="faces">
       <div class="face" data-face="0">0</div>
       <div class="face" data-face="1">1</div>
@@ -54,18 +126,18 @@
     </div>
     <div class="kv"><span class="k">bitmask (dec)</span><span class="v" id="bm-dec">—</span></div>
     <div class="kv"><span class="k">bitmask (bin)</span><span class="v" id="bm-bin">—</span></div>
-    <div class="kv"><span class="k">asse pinzato</span><span class="v" id="axis">—</span></div>
-    <div class="kv"><span class="k">faccia indice</span><span class="v" id="fface">—</span></div>
-    <div class="kv"><span class="k">ultima mossa</span><span class="v" id="move">—</span></div>
-    <div class="kv"><span class="k">distanza</span><span class="v" id="dist">—</span></div>
+    <div class="kv"><span class="k">pinched axis</span><span class="v" id="axis">—</span></div>
+    <div class="kv"><span class="k">index face</span><span class="v" id="fface">—</span></div>
+    <div class="kv"><span class="k">last move</span><span class="v" id="move">—</span></div>
+    <div class="kv"><span class="k">distance</span><span class="v" id="dist">—</span></div>
     <p id="move-desc" style="color:var(--muted); font-size:13px; margin-top:12px;"></p>
   </div>
 
   <div class="panel">
-    <h2>Log eventi (tutti, incluse letture non valide)</h2>
+    <h2>Event log (all events, including invalid readings)</h2>
     <div class="logwrap">
       <table>
-        <thead><tr><th>ora</th><th>bitmask</th><th>facce</th><th>stato (P,f)</th><th>mossa</th></tr></thead>
+        <thead><tr><th>time</th><th>bitmask</th><th>faces</th><th>state (P,f)</th><th>move</th></tr></thead>
         <tbody id="log"></tbody>
       </table>
     </div>
@@ -73,10 +145,10 @@
 </main>
 <main style="grid-template-columns: 1fr; margin-top:0;">
   <div class="panel">
-    <h2>Log stati validi (solo letture pinza+1 riconosciute)</h2>
+    <h2>Valid state log (only recognised pinch+1 readings)</h2>
     <div class="logwrap">
       <table>
-        <thead><tr><th>ora</th><th>bitmask</th><th>stato (P,f)</th><th>mossa</th><th>distanza</th></tr></thead>
+        <thead><tr><th>time</th><th>bitmask</th><th>state (P,f)</th><th>move</th><th>distance</th></tr></thead>
         <tbody id="log-valid"></tbody>
       </table>
     </div>
@@ -96,6 +168,17 @@ function setStatus(ok, text) {
   statusText.textContent = text;
 }
 
+// move label: if ambiguous with more than 1 alt_moves, show all the
+// alternatives with a textual "AMBIGUOUS" marker (not colour alone), so it
+// stays readable even when the log is copied as plain text.
+function moveLabel(d) {
+  if (!d.move) return d.ok ? '—' : (d.reason || '—');
+  if (d.ambiguous && d.alt_moves && d.alt_moves.length > 1) {
+    return `<span class="move-badge amb">AMBIGUOUS: ${d.alt_moves.join(' / ')}</span>`;
+  }
+  return `<span class="move-badge">${d.move}</span>`;
+}
+
 function updateFaces(faces) {
   document.querySelectorAll('.face').forEach(el => {
     const f = parseInt(el.dataset.face, 10);
@@ -105,45 +188,143 @@ function updateFaces(faces) {
 
 function addLogRow(d) {
   const tr = document.createElement('tr');
-  const t = new Date(d.timestamp * 1000).toLocaleTimeString('it-IT', {hour12:false});
-  const stateStr = d.state ? `${d.state[0]}, ${d.state[1]}` : (d.ok ? '—' : '<span class="bad">non valido</span>');
+  const t = new Date(d.timestamp * 1000).toLocaleTimeString('en-GB', {hour12:false});
+  const stateStr = d.state ? `${d.state[0]}, ${d.state[1]}` : (d.ok ? '—' : '<span class="bad">invalid</span>');
   tr.innerHTML = `<td>${t}</td><td><code>${d.bitmask_bin ?? ''} (${d.bitmask ?? ''})</code></td>` +
                  `<td>${(d.faces||[]).join(',')}</td><td>${stateStr}</td>` +
-                 `<td>${d.move ?? (d.ok ? '' : d.reason || '')}</td>`;
+                 `<td>${moveLabel(d)}</td>`;
   log.prepend(tr);
   rowCount++;
   if (rowCount > 300) { log.lastChild && log.removeChild(log.lastChild); }
 }
 
-// log separato che include SOLO le letture valide (pinza+1 riconosciuta),
-// cioe' d.ok === true e d.state presente (esclude letture invalide/debounce
-// e il messaggio "stato iniziale" viene comunque incluso perche' e' valido).
+// separate log that includes ONLY the valid readings (pinch+1 recognised),
+// i.e. d.ok === true and d.state present (it excludes invalid/debounce
+// readings; the "initial state" message is still included as it is valid).
 function addValidLogRow(d) {
   const tr = document.createElement('tr');
-  const t = new Date(d.timestamp * 1000).toLocaleTimeString('it-IT', {hour12:false});
-  const moveStr = d.move
-    ? `<span class="move-badge ${d.ambiguous ? 'amb' : ''}">${d.move}</span>`
-    : (d.reason || '—');
+  const t = new Date(d.timestamp * 1000).toLocaleTimeString('en-GB', {hour12:false});
   tr.innerHTML = `<td>${t}</td><td><code>${d.bitmask_bin ?? ''} (${d.bitmask ?? ''})</code></td>` +
-                 `<td>${d.state[0]}, ${d.state[1]}</td><td>${moveStr}</td>` +
+                 `<td>${d.state[0]}, ${d.state[1]}</td><td>${moveLabel(d)}</td>` +
                  `<td>${d.distance ?? 0}</td>`;
   logValid.prepend(tr);
   validRowCount++;
   if (validRowCount > 300) { logValid.lastChild && logValid.removeChild(logValid.lastChild); }
 }
 
+// --- pannello del protocollo di test ---------------------------------------
+let paused = false;
+
+/** Updates the panel with the state received from the server (the single
+ *  source of truth: the cursor lives in the recorder, not in the browser). */
+function renderProgress(p) {
+  paused = !!p.paused;
+  document.body.classList.toggle('paused', paused);
+  document.getElementById('btn-pause').textContent = paused ? '▶ Resume' : '⏸ Pause';
+
+  const done = p.done || 0, total = p.total || 0;
+  document.getElementById('step-num').textContent = `step ${Math.min(done + 1, total)} / ${total}`;
+  document.getElementById('c-done').textContent = done;
+  document.getElementById('c-ok').textContent = p.ok || 0;
+  document.getElementById('c-ko').textContent = p.mismatch || 0;
+  document.getElementById('c-log').textContent = p.log_file || '—';
+  document.getElementById('bar-fill').style.width = total ? (100 * done / total) + '%' : '0';
+
+  const todo = document.getElementById('todo');
+  todo.classList.toggle('calibrating', p.phase === 'calibrating' || p.phase === 'positioning');
+
+  if (p.phase === 'calibrating') {
+    todo.classList.remove('done-all');
+    document.getElementById('todo-move').textContent = '↻ ' + (p.calibration_move || 'tip_U+');
+    document.getElementById('todo-instr').textContent = 'Turn the cube forward.';
+    document.getElementById('todo-exp').textContent = p.recalibrating
+      ? `A reading was lost: resynchronise first, then step ${done + 1} will resume.`
+      : 'Starting calibration: this fixes the cube’s known starting orientation.';
+  } else if (p.phase === 'positioning') {
+    const n = p.next_step;
+    todo.classList.remove('done-all');
+    if (p.position_hint) {
+      document.getElementById('todo-move').textContent = '➜ ' + p.position_hint;
+      document.getElementById('todo-instr').innerHTML = n
+        ? `Repositioning before step ${done + 1}: perform this move next (not timed).`
+        : '';
+    } else {
+      document.getElementById('todo-move').textContent = '➜ position the cube';
+      document.getElementById('todo-instr').innerHTML = n
+        ? `Before step ${done + 1}: reposition to axis <b>${n.start_axis}</b> · face <b>${n.start_face}</b> (not timed).`
+        : '';
+    }
+    const cur = p.shadow_state;
+    document.getElementById('todo-exp').textContent = cur
+      ? `currently detected: axis ${cur[0]} · face ${cur[1]}`
+      : 'waiting for a reading…';
+  } else {
+    const n = p.next_step;
+    if (n) {
+      todo.classList.remove('done-all');
+      document.getElementById('todo-move').textContent = n.move;
+      document.getElementById('todo-instr').textContent = n.instruction || '';
+      document.getElementById('todo-exp').innerHTML =
+        `expected after the move: axis <b>${n.expected_axis}</b> · index face <b>${n.expected_index_face}</b>`;
+    } else {
+      todo.classList.add('done-all');
+      document.getElementById('todo-move').textContent = '✓ test completed';
+      document.getElementById('todo-instr').textContent =
+        `All ${total} steps have been recorded.`;
+      document.getElementById('todo-exp').textContent = '';
+    }
+  }
+
+  // outcome of the step just performed, to spot an error straight away
+  const last = p.last_step;
+  const el = document.getElementById('last-result');
+  if (last && last.detected_move) {
+    const good = last.match === 'OK';
+    el.innerHTML = `step ${last.step}: detected <code>${last.detected_move}</code> ` +
+      `→ ${last.detected_axis},${last.detected_index_face} ` +
+      `<span class="${good ? 'ok' : 'ko'}">${last.match}</span>` +
+      (good ? '' : ` (expected <code>${last.move}</code> → ${last.expected_axis},${last.expected_index_face})`);
+  } else {
+    el.textContent = '';
+  }
+}
+
+async function control(action) {
+  try {
+    const r = await fetch('/protocol-control/' + action, { method: 'POST' });
+    renderProgress(await r.json());
+  } catch (e) {
+    setStatus(false, 'command failed: ' + e.message);
+  }
+}
+
+document.getElementById('btn-pause').onclick = () => control(paused ? 'resume' : 'pause');
+document.getElementById('btn-redo').onclick = () => control('redo');
+document.getElementById('btn-reset').onclick = () => {
+  // destructive reset: clears every column already filled in
+  const msg = "Reset the test? All the results recorded in the CSV will be deleted.\n" +
+              "The raw session log is kept on file regardless.";
+  if (confirm(msg)) { control('reset'); }
+};
+
+fetch('/protocol-progress').then(r => r.json()).then(renderProgress).catch(() => {});
+
 const es = new EventSource('/stream');
-es.onopen = () => setStatus(true, 'connesso allo stream');
-es.onerror = () => setStatus(false, 'stream disconnesso, riconnessione...');
+es.onopen = () => setStatus(true, 'connected to the stream');
+es.onerror = () => setStatus(false, 'stream disconnected, reconnecting...');
 
 es.onmessage = (e) => {
   const d = JSON.parse(e.data);
   if (d.type === 'status') {
-    setStatus(d.status.includes('connesso') && !d.status.includes('dis'), d.status);
+    setStatus(d.status.includes('connected') && !d.status.includes('dis'), d.status);
     return;
   }
   if (d.type === 'raw_error') {
-    setStatus(false, 'payload non riconosciuto: ' + d.payload);
+    setStatus(false, 'unrecognised payload: ' + d.payload);
+    return;
+  }
+  if (d.type === 'progress') {
+    renderProgress(d);
     return;
   }
   // type === 'event'
@@ -154,8 +335,7 @@ es.onmessage = (e) => {
     document.getElementById('axis').textContent = d.state[0];
     document.getElementById('fface').textContent = d.state[1];
   }
-  document.getElementById('move').innerHTML = d.move
-    ? `<span class="move-badge ${d.ambiguous ? 'amb' : ''}">${d.move}</span>` : '—';
+  document.getElementById('move').innerHTML = moveLabel(d);
   document.getElementById('dist').textContent = d.distance ?? '—';
   document.getElementById('move-desc').textContent = d.move_desc || (d.ok ? '' : d.reason);
   addLogRow(d);
