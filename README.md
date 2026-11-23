@@ -1,9 +1,11 @@
 # Cubetto — dashboard live di riconoscimento rotazione
 
-Legge il flusso di tocco dal broker MQTT (`ws://REDACTED_BROKER_HOST:7080`,
-topic `cubetto/tuoch`, payload = intero 0-63 = bitmask a 6 bit, bit *i* =
-faccia *i*), lo passa all'algoritmo (`cube_algorithm.py`) e mostra in tempo
-reale, in una pagina web, lo stato del cubo e ogni rotazione riconosciuta.
+Legge il flusso di tocco da un broker MQTT (indirizzo e credenziali presi da
+variabili d'ambiente, vedi `.env.example` — nessun dato sensibile è
+presente nel codice), topic configurabile (default `cubetto/touch`),
+payload = intero 0-63 = bitmask a 6 bit, bit *i* = faccia *i*), lo passa
+all'algoritmo (`cube_algorithm.py`) e mostra in tempo reale, in una pagina
+web, lo stato del cubo e ogni rotazione riconosciuta.
 
 **Nota:** il codice non è stato testato dal vivo contro il broker perché
 l'ambiente in cui è stato scritto non ha accesso di rete a quell'indirizzo
@@ -15,6 +17,8 @@ né a PyPI. Va eseguito e verificato in locale.
 python -m venv .venv
 source .venv/bin/activate        # su Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+cp .env.example .env             # poi compila .env con i tuoi valori reali
+export $(grep -v '^#' .env | xargs)
 python app.py
 ```
 
@@ -28,8 +32,7 @@ tutti gli eventi.
 - Controlla il log in console (`python app.py` stampa lo stato della
   connessione MQTT).
 - Il path websocket di default è `/mqtt` (standard paho-mqtt). Se il
-  broker usa un path diverso, modificalo in `mqtt_client.py`
-  (`BROKER_WS_PATH`).
+  broker usa un path diverso, imposta `CUBETTO_BROKER_WS_PATH` in `.env`.
 - Se il payload non è un intero semplice ("9"), controlla il log: i
   payload non interpretabili vengono segnalati (evento `raw_error`) invece
   di far crashare l'app — usa quell'informazione per adattare

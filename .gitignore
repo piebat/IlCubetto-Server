@@ -1,1 +1,8 @@
 .DS_Store
+.venv/
+__pycache__/
+*.pyc
+logs/
+.env
+cubetto_app/
+cubetto_app.zip

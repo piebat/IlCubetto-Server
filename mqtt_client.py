@@ -4,13 +4,19 @@ broadcaster shared with the Flask app.
 
 NOTE: not tested live in this environment (no network access to the broker
 during development) -- it needs to be verified locally. If the websocket
-connection fails, the first thing to suspect is BROKER_WS_PATH (paho-mqtt
-default "/mqtt": if your broker (e.g. Mosquitto with websockets) uses a
-different path, change it below).
+connection fails, the first thing to suspect is CUBETTO_BROKER_WS_PATH
+(paho-mqtt default "/mqtt": if your broker (e.g. Mosquitto with websockets)
+uses a different path, change it below).
+
+All broker configuration (host, credentials, CA cert path) comes from
+environment variables -- see the "broker configuration" section below and
+.env.example for the full list and expected format. Nothing sensitive is
+hardcoded here, so this file is safe to publish/share.
 """
 import json
 import logging
 import os
+import sys
 import threading
 import time
 
@@ -30,15 +36,25 @@ _fh = logging.FileHandler(os.path.join(LOG_DIR, "cubetto.log"), encoding="utf-8"
 _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
 logging.getLogger().addHandler(_fh)
 
-# --- broker configuration ---------------------------------------------------
-BROKER_HOST = "REDACTED_BROKER_HOST"
-BROKER_PORT = 7080
-BROKER_WS_PATH = "/mqtt"      # change here if the broker uses another path
-BROKER_CA_CERT = "REDACTED_CA_CERT_PATH"
-BROKER_USERNAME = "REDACTED_USERNAME"
-BROKER_PASSWORD = "REDACTED_PASSWORD"
-TOPIC = "cubetto/touch"
-VIBRATION_TOPIC = "cubetto/vibrations"   # haptic feedback towards the cube
+
+def _required_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        sys.exit(f"Missing required environment variable: {name}\n"
+                  f"Copy .env.example to .env, fill it in, and load it "
+                  f"(e.g. `export $(grep -v '^#' .env | xargs)`) before running.")
+    return value
+
+
+# --- broker configuration (from environment, never hardcoded) --------------
+BROKER_HOST = _required_env("CUBETTO_BROKER_HOST")
+BROKER_PORT = int(os.environ.get("CUBETTO_BROKER_PORT", "8883"))
+BROKER_WS_PATH = os.environ.get("CUBETTO_BROKER_WS_PATH", "/mqtt")
+BROKER_CA_CERT = _required_env("CUBETTO_BROKER_CA_CERT")
+BROKER_USERNAME = _required_env("CUBETTO_BROKER_USERNAME")
+BROKER_PASSWORD = _required_env("CUBETTO_BROKER_PASSWORD")
+TOPIC = os.environ.get("CUBETTO_TOPIC", "cubetto/touch")
+VIBRATION_TOPIC = os.environ.get("CUBETTO_VIBRATION_TOPIC", "cubetto/vibrations")
 VIBRATION_PAYLOAD = "S"                   # published after every valid reading
 # ----------------------------------------------------------------------------
 
