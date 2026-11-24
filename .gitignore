@@ -1,8 +1,15 @@
 .DS_Store
+**/.DS_Store
 .venv/
+venv/
 __pycache__/
+**/__pycache__/
 *.pyc
 logs/
 .env
+.env.*
+!.env.example
 cubetto_app/
 cubetto_app.zip
+*.egg-info/
+.pytest_cache/
