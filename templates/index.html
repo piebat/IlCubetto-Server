@@ -74,7 +74,7 @@
 <header>
   <h1>🧊 Cubetto — rotation recognition (live)</h1>
   <div class="status">
-    <span class="user-badge">tester <b>{{ meta.user_id }}</b> · round {{ meta.round }} · age {{ meta.age or '—' }} · {{ meta.gender or '—' }}</span>
+    <span class="user-badge">tester <b>{{ meta.user_id }}</b> · round {{ meta.round }} · order {{ meta.order_index }} · age {{ meta.age or '—' }} · {{ meta.gender or '—' }}</span>
     <a href="/setup" style="color:var(--accent); text-decoration:none;">new test / switch user</a>
     <a href="/graph" style="color:var(--accent); text-decoration:none;">3D state graph →</a>
     <span class="dot" id="dot"></span><span id="status-text">waiting...</span>
@@ -231,59 +231,41 @@ function renderProgress(p) {
   document.getElementById('bar-fill').style.width = total ? (100 * done / total) + '%' : '0';
 
   const todo = document.getElementById('todo');
-  todo.classList.toggle('calibrating', p.phase === 'calibrating' || p.phase === 'positioning');
+  todo.classList.toggle('calibrating', p.phase === 'calibrating');
 
   if (p.phase === 'calibrating') {
     todo.classList.remove('done-all');
     document.getElementById('todo-move').textContent = '↻ ' + (p.calibration_move || 'tip_U+');
     document.getElementById('todo-instr').textContent = 'Turn the cube forward.';
     document.getElementById('todo-exp').textContent = p.recalibrating
-      ? `A reading was lost: resynchronise first, then step ${done + 1} will resume.`
+      ? `A reading was lost: resynchronise first, then symbol ${done + 1} will be retried.`
       : 'Starting calibration: this fixes the cube’s known starting orientation.';
-  } else if (p.phase === 'positioning') {
-    const n = p.next_step;
-    todo.classList.remove('done-all');
-    if (p.position_hint) {
-      document.getElementById('todo-move').textContent = '➜ ' + p.position_hint;
-      document.getElementById('todo-instr').innerHTML = n
-        ? `Repositioning before step ${done + 1}: perform this move next (not timed).`
-        : '';
-    } else {
-      document.getElementById('todo-move').textContent = '➜ position the cube';
-      document.getElementById('todo-instr').innerHTML = n
-        ? `Before step ${done + 1}: reposition to axis <b>${n.start_axis}</b> · face <b>${n.start_face}</b> (not timed).`
-        : '';
-    }
-    const cur = p.shadow_state;
-    document.getElementById('todo-exp').textContent = cur
-      ? `currently detected: axis ${cur[0]} · face ${cur[1]}`
-      : 'waiting for a reading…';
   } else {
     const n = p.next_step;
     if (n) {
       todo.classList.remove('done-all');
-      document.getElementById('todo-move').textContent = n.move;
+      document.getElementById('todo-move').textContent = n.symbol;
       document.getElementById('todo-instr').textContent = n.instruction || '';
-      document.getElementById('todo-exp').innerHTML =
-        `expected after the move: axis <b>${n.expected_axis}</b> · index face <b>${n.expected_index_face}</b>`;
+      document.getElementById('todo-exp').innerHTML = p.awaiting_move2
+        ? `first move <b>${n.move1}</b> detected — now perform <b>${n.move2}</b>`
+        : `perform, in order: <b>${n.move1}</b> then <b>${n.move2}</b>`;
     } else {
       todo.classList.add('done-all');
       document.getElementById('todo-move').textContent = '✓ test completed';
       document.getElementById('todo-instr').textContent =
-        `All ${total} steps have been recorded.`;
+        `All ${total} symbols have been recorded.`;
       document.getElementById('todo-exp').textContent = '';
     }
   }
 
-  // outcome of the step just performed, to spot an error straight away
+  // outcome of the symbol just performed, to spot an error straight away
   const last = p.last_step;
   const el = document.getElementById('last-result');
-  if (last && last.detected_move) {
+  if (last && last.detected_move1) {
     const good = last.match === 'OK';
-    el.innerHTML = `step ${last.step}: detected <code>${last.detected_move}</code> ` +
-      `→ ${last.detected_axis},${last.detected_index_face} ` +
+    el.innerHTML = `step ${last.step}: detected <code>${last.detected_move1} + ${last.detected_move2}</code> ` +
       `<span class="${good ? 'ok' : 'ko'}">${last.match}</span>` +
-      (good ? '' : ` (expected <code>${last.move}</code> → ${last.expected_axis},${last.expected_index_face})`);
+      (good ? '' : ` (expected <code>${last.move1} + ${last.move2}</code>)`);
   } else {
     el.textContent = '';
   }
@@ -340,6 +322,18 @@ es.onmessage = (e) => {
   document.getElementById('move-desc').textContent = d.move_desc || (d.ok ? '' : d.reason);
   addLogRow(d);
   if (d.ok && d.state) { addValidLogRow(d); }
+
+  // t2: when this event was actually rendered on screen, for the
+  // classify->display leg of the latency measurement (see
+  // latency_report.py). Sent as a one-way beacon, best-effort: losing an
+  // occasional one only drops that sample, it never blocks the UI.
+  if (d.t1 != null) {
+    fetch('/beacon', {
+      method: 'POST', keepalive: true,
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({t1: d.t1, t2: Date.now() / 1000}),
+    }).catch(() => {});
+  }
 };
 </script>
 </body>

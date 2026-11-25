@@ -9,33 +9,35 @@ directory logs/<user_id>/:
    nothing is discarded, so post-hoc analysis can also count reading
    errors.
 
-2. ``protocol.csv`` -- the 12 combinations assigned to this tester's slot
-   (see combination_plan.py), filled in step by step: every recognised
-   *valid* move fills the next still-empty row (detected_move,
-   detected_axis, detected_index_face, match). Rewritten in full at every
-   step: 12 rows are few, and a complete rewrite prevents an interruption
-   from leaving a half-written row.
+2. ``protocol.csv`` -- the 16 symbols assigned to this tester's session
+   order (see symbol_plan.py), filled in step by step: every recognised
+   *valid* move fills the next still-open slot of the current row
+   (detected_move1, then detected_move2, then match is computed). Rewritten
+   in full at every step: 16 rows are few, and a complete rewrite prevents
+   an interruption from leaving a half-written row.
 
-3. ``meta.json`` -- user_id, round, slot, age, gender, notes, started_at,
-   and (once the 12th step is filled in) ended_at.
+3. ``meta.json`` -- user_id, round, order_index, age, gender, notes,
+   started_at, and (once the 16th row is filled in) ended_at.
 
-Before any move of the protocol can be judged, the cube's internal
-orientation must be pinned to a KNOWN value -- CubeTracker locks onto an
-arbitrary one of the two "hidden-bit twin" orientations on its very first
-reading, and the sensors alone cannot tell which. The recorder therefore
-starts (and re-enters, after any ambiguous/missed-reading jump) a
-calibration phase: the tester is asked to perform a fixed move ('tip_U+',
-"turn the cube forward") whose outcome, combined with the state observed
-right before it, lets CubeTracker.calibrate() resolve the ambiguity.
+A Symbol is an ordered pair of two consecutive elementary rotations (see
+symbol_plan.py). Symbols are chained: each one simply starts wherever the
+cube was left by the previous one -- there is no required starting
+orientation to reposition to, unlike the single-move protocol this
+replaces.
 
-That calibration move itself displaces the cube to wherever 'tip_U+'
-happens to take it from its (arbitrary) pre-calibration orientation --
-generally NOT the starting orientation the current protocol row requires.
-So calibration is followed by a positioning phase: the tester is guided,
-one elementary move at a time (the recorder's `position_hint`, via
-cube_algorithm's precomputed shortest paths), to the row's required start,
-verified by the sensor rather than trusted. Only once positioned does the
-recorder arm the row and score the next recognised move against it.
+Before any move can be judged, the cube's internal orientation must be
+pinned to a KNOWN value -- CubeTracker locks onto an arbitrary one of the
+two "hidden-bit twin" orientations on its very first reading, and the
+sensors alone cannot tell which. The recorder therefore starts (and
+re-enters, after any ambiguous/missed-reading jump) a calibration phase: the
+tester is asked to perform a fixed move ('tip_U+', "turn the cube forward")
+whose outcome, combined with the state observed right before it, lets
+CubeTracker.calibrate() resolve the ambiguity.
+
+If an ambiguous reading occurs mid-symbol (a missed step or a loss of
+grip), the current symbol's partially-recorded moves are discarded and the
+tester is asked to repeat the calibration rotation; once recalibrated, the
+SAME symbol (not the next one) is retried.
 """
 import csv
 import json
@@ -54,20 +56,11 @@ LOG_DIR = os.path.join(BASE_DIR, "logs")
 CALIBRATION_MOVE = "tip_U+"
 
 # columns filled in by the recorder (the others belong to the protocol)
-FILLED_COLS = ["detected_move", "detected_axis", "detected_index_face", "match"]
-
-
-def _cell(row, key):
-    """String form of a protocol cell, treating a legitimately falsy value
-    (face 0) the same as any other -- `value or ""` would collapse 0 to ""."""
-    value = row.get(key)
-    return "" if value is None else str(value).strip()
-
+FILLED_COLS = ["detected_move1", "detected_move2", "match"]
 
 PROTOCOL_FIELDNAMES = [
-    "step", "move", "start_axis", "start_face", "expected_axis",
-    "expected_index_face", "instruction",
-    "detected_move", "detected_axis", "detected_index_face", "match",
+    "step", "symbol", "move1", "move2", "instruction",
+    "detected_move1", "detected_move2", "match",
 ]
 
 
@@ -83,7 +76,7 @@ class SessionRecorder:
         self._lock = threading.Lock()
         self._rows = rows
         self._fieldnames = PROTOCOL_FIELDNAMES
-        self._cursor = 0         # index of the next row to fill in
+        self._cursor = 0         # index of the row (symbol) being filled in
         self._event_seq = 0
 
         # calibration state machine -- see module docstring.
@@ -96,18 +89,14 @@ class SessionRecorder:
         self._on_calibrate = on_calibrate
 
         # while paused, events still go to the raw log but do not consume
-        # protocol steps or calibration progress: this allows repositioning
-        # the cube without corrupting the sequence.
+        # protocol steps or calibration progress.
         self._paused = False
 
         # "shadow" tracker: same algorithm (CubeTracker) as the real tracker
         # in mqtt_client.py, fed with the same raw readings (data['faces']).
         # Being deterministic on the same input (and calibrated the same
         # way, via _on_calibrate), it always matches the real tracker's
-        # internal id exactly. It is used to compute the "true" expected
-        # state from where the cube REALLY was, instead of assuming a fixed
-        # starting id like the precomputed expected_axis/expected_index_face
-        # columns in the CSV do.
+        # internal id exactly.
         self._shadow = ca.CubeTracker()
         # ambiguous readings discarded so far (sensor faults, not steps)
         self._ambiguous_count = 0
@@ -152,15 +141,15 @@ class SessionRecorder:
             if not self._paused:
                 if self._phase == "calibrating":
                     calib_result = self._advance_calibration(shadow_ev)
-                elif self._phase == "positioning":
-                    self._advance_positioning(shadow_ev)
                 elif self._phase == "running":
                     if shadow_ev.ambiguous:
                         # An ambiguous jump means confidence in the tracked
-                        # orientation is lost, not just that one reading was
-                        # noisy: re-pin it (then reposition) before the
-                        # current step can be retried.
+                        # orientation is lost (a missed step or a loss of
+                        # grip): discard whatever was recorded so far for the
+                        # CURRENT symbol, recalibrate, then retry the same
+                        # symbol -- it is not advanced past.
                         self._ambiguous_count += 1
+                        self._discard_current_symbol()
                         self._phase = "calibrating"
                         self._calib_prev_state = None
                         log.warning("ambiguous reading discarded (step %s): recalibrate",
@@ -170,7 +159,7 @@ class SessionRecorder:
                         usable = (bool(data.get("ok")) and data.get("move")
                                   and self._cursor < len(self._rows))
                         if usable:
-                            step, match = self._fill_row(data)
+                            step, match = self._advance_symbol(data)
 
             self._write_log({
                 **data,
@@ -180,6 +169,21 @@ class SessionRecorder:
                 "phase": self._phase,
                 "calibration": calib_result,
                 "paused": self._paused,
+                "recorded_at": datetime.now().isoformat(timespec="milliseconds"),
+            })
+
+    def record_display(self, t1: float, t2: float):
+        """Called from the /beacon route with t1 (server receipt/classify
+        time, as sent down in the event) and t2 (when the browser rendered
+        it). Written as its own log line rather than patched into the
+        original event's line: the event is already on disk by the time the
+        browser round-trips the beacon, and jsonl is append-only."""
+        with self._lock:
+            self._write_log({
+                "type": "display",
+                "t1": t1,
+                "t2": t2,
+                "classify_to_display_ms": (t2 - t1) * 1000.0,
                 "recorded_at": datetime.now().isoformat(timespec="milliseconds"),
             })
 
@@ -200,7 +204,7 @@ class SessionRecorder:
             self._on_calibrate(CALIBRATION_MOVE, prev)
 
         if pinned:
-            self._phase = "positioning" if self._cursor < len(self._rows) else "done"
+            self._phase = "running" if self._cursor < len(self._rows) else "done"
             self._calib_prev_state = None
             return "pinned"
 
@@ -208,81 +212,40 @@ class SessionRecorder:
         self._calib_prev_state = shadow_ev.state
         return "retry"
 
-    def _advance_positioning(self, shadow_ev):
-        """The calibration move itself displaces the cube to an orientation
-        that generally does NOT match the current row's required starting
-        state (see module docstring): the tester must manually reposition
-        it there before the timed move is armed. This phase only reads the
-        sensor to confirm arrival (or recompute the next recommended move,
-        see `_next_position_hint`) -- it never fills in a row."""
-        if not shadow_ev.ok:
-            return
-        if shadow_ev.ambiguous:
-            self._phase = "calibrating"
-            self._calib_prev_state = None
-            return
+    def _discard_current_symbol(self):
+        """Clears whatever moves have already been recorded for the symbol
+        currently in progress, without advancing the cursor past it."""
+        if self._cursor < len(self._rows):
+            row = self._rows[self._cursor]
+            for col in FILLED_COLS:
+                row[col] = ""
+            self._write_protocol()
 
-        if self._at_required_start(shadow_ev.state):
-            self._phase = "running"
-
-    def _next_position_hint(self):
-        """The single next elementary move recommended to approach the
-        current row's required starting orientation from here, found via
-        cube_algorithm's precomputed shortest paths. None once positioned
-        (or if the shadow isn't calibrated yet)."""
-        if self._cursor >= len(self._rows) or self._shadow._id is None:
-            return None
-        target_id = self._rows[self._cursor].get("source_id")
-        if target_id is None or self._shadow._id == target_id:
-            return None
-        return ca._ALL_PAIRS_FIRSTSTEP[self._shadow._id].get(target_id)
-
-    def _at_required_start(self, state) -> bool:
+    def _advance_symbol(self, data: dict):
+        """Fills in the next open slot (move1, then move2) of the current
+        row from this event. Once both are filled, scores the row and moves
+        the cursor to the next symbol. Returns (step, match) -- match is
+        None until the second move of the pair completes the row."""
         row = self._rows[self._cursor]
-        target = (_cell(row, "start_axis"), _cell(row, "start_face"))
-        axis, face = state if state else (None, None)
-        return (str(axis), str(face)) == target
-
-    def _fill_row(self, data: dict):
-        """Fills in the current protocol row from this event. Returns
-        (step, match).
-
-        Reached only from `running`, entered only once `positioning` has
-        confirmed the cube sits at the row's required starting state -- so
-        a MISMATCH here means the move itself was wrong, not that the cube
-        started from an unexpected orientation."""
-        row = self._rows[self._cursor]
-        state = data.get("state") or (None, None)
-        axis, face = (state[0], state[1]) if isinstance(state, (list, tuple)) and len(state) == 2 else (None, None)
-
         move = data.get("move") or ""
-        row["detected_move"] = move
-        row["detected_axis"] = "" if axis is None else str(axis)
-        row["detected_index_face"] = "" if face is None else str(face)
 
-        planned_move = _cell(row, "move")
-        state_now = (str(axis), str(face))
+        if not row["detected_move1"]:
+            row["detected_move1"] = move
+            self._write_protocol()
+            return row.get("step"), None
 
-        expected = (_cell(row, "expected_axis"), _cell(row, "expected_index_face"))
-        ok = (move == planned_move) and (state_now == expected)
-
+        row["detected_move2"] = move
+        ok = (row["detected_move1"] == row["move1"]) and (row["detected_move2"] == row["move2"])
         row["match"] = "OK" if ok else "MISMATCH"
 
         step = row.get("step")
+        match = row["match"]
         self._cursor += 1
         if self._cursor >= len(self._rows):
             self._phase = "done"
             self._write_meta_ended()
-        else:
-            # The move just scored already leaves the cube at `expected`,
-            # which usually (thanks to combination_plan's Eulerian chaining)
-            # IS the next row's required start -- checked immediately
-            # against the state we already have, rather than waiting for a
-            # fresh reading that may never come if the tester does nothing.
-            self._phase = ("running" if self._at_required_start(self._shadow.state)
-                           else "positioning")
         self._write_protocol()
-        return step, row["match"]
+        return step, match
 
     def _write_meta_ended(self):
         if not self.meta:
@@ -315,8 +278,9 @@ class SessionRecorder:
             return self._progress_locked()
 
     def redo_step(self):
-        """Undoes the last recorded step: the row is emptied and the next
-        move fills it in again. Useful when a manipulation went wrong.
+        """Undoes the last recorded symbol: the row is emptied and the next
+        pair of moves fills it in again. Useful when a manipulation went
+        wrong.
 
         Note: the shadow tracker (`_shadow`) is NOT rolled back, because it
         mirrors the real tracker, which has advanced on the physical cube
@@ -329,7 +293,6 @@ class SessionRecorder:
             row = self._rows[self._cursor]
             for col in FILLED_COLS:
                 row[col] = ""
-            self._phase = "positioning"
             self._write_protocol()
             self._write_log({"type": "control", "action": "redo_step",
                              "step": row.get("step"), "cursor": self._cursor,
@@ -367,6 +330,7 @@ class SessionRecorder:
         done = self._cursor
         total = len(self._rows)
         ok = sum(1 for r in self._rows[:done] if r.get("match") == "OK")
+        current = self._rows[done] if done < total else None
         return {
             "done": done,
             "total": total,
@@ -377,9 +341,9 @@ class SessionRecorder:
             "recalibrating": self._phase == "calibrating" and done > 0,
             "calibration_move": CALIBRATION_MOVE,
             "shadow_state": self._shadow.state,
-            "position_hint": self._next_position_hint() if self._phase == "positioning" else None,
+            "awaiting_move2": bool(current and current.get("detected_move1")),
             "log_file": os.path.basename(self.log_path),
-            "next_step": self._rows[done] if done < total else None,
+            "next_step": current,
             "last_step": self._rows[done - 1] if done > 0 else None,
             "discarded": self._ambiguous_count,
         }

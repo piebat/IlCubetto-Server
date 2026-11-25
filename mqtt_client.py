@@ -23,6 +23,7 @@ import time
 import paho.mqtt.client as mqtt
 
 import current_session
+from clock_sync import clock_sync
 from cube_algorithm import bitmask_to_faces, CubeTracker
 from broadcaster import broadcaster
 from session_recorder import LOG_DIR
@@ -56,6 +57,9 @@ BROKER_PASSWORD = _required_env("CUBETTO_BROKER_PASSWORD")
 TOPIC = os.environ.get("CUBETTO_TOPIC", "cubetto/touch")
 VIBRATION_TOPIC = os.environ.get("CUBETTO_VIBRATION_TOPIC", "cubetto/vibrations")
 VIBRATION_PAYLOAD = "S"                   # published after every valid reading
+PING_TOPIC = os.environ.get("CUBETTO_PING_TOPIC", "cubetto/ping")
+PONG_TOPIC = os.environ.get("CUBETTO_PONG_TOPIC", "cubetto/pong")
+PING_INTERVAL_S = float(os.environ.get("CUBETTO_PING_INTERVAL_S", "10"))
 # ----------------------------------------------------------------------------
 
 tracker = CubeTracker()
@@ -70,29 +74,44 @@ def calibrate_tracker(expected_move: str, previous_state: tuple) -> bool:
 
 def _parse_bitmask(payload: bytes):
     """Interprets the payload as an integer 0-63 (6-bit bitmask).
-    Supports plain text ("9"), hexadecimal ("0x09") or binary ("0b001001").
-    Returns None if it cannot be interpreted (and publishes the raw payload
-    for debugging)."""
+    Supports plain text ("9"), hexadecimal ("0x09") or binary ("0b001001"),
+    or JSON such as {"bitmask": 9} or {"bitmask": 9, "t0": 123456} (see
+    `_parse_t0`). Returns (bitmask, t0) -- either element is None if it
+    cannot be interpreted/is absent."""
     text = payload.decode("utf-8", errors="replace").strip()
     try:
-        return int(text, 0) if text.lower().startswith(("0x", "0b")) else int(text)
+        value = int(text, 0) if text.lower().startswith(("0x", "0b")) else int(text)
+        return value, None
     except ValueError:
         try:
-            # fallback: it might be JSON such as {"bitmask": 9}
             obj = json.loads(text)
             if isinstance(obj, dict) and "bitmask" in obj:
-                return int(obj["bitmask"])
+                return int(obj["bitmask"]), _parse_t0(obj)
             if isinstance(obj, int):
-                return obj
+                return obj, None
         except Exception:
             pass
-    return None
+    return None, None
+
+
+def _parse_t0(obj: dict):
+    """Optional firmware-side publish timestamp, in milliseconds on the
+    ESP32's own clock (e.g. `millis()`). Not wall-clock-comparable to the
+    server's `time.time()` on its own -- see `clock_sync.offset_ms()`,
+    which estimates the firmware/server clock offset via MQTT ping/pong so
+    this value can be converted to server time."""
+    t0 = obj.get("t0")
+    try:
+        return float(t0) if t0 is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _on_connect(client, userdata, flags, reason_code, properties=None):
     if reason_code == 0 or reason_code == "Success":
-        log.info("Connected to the MQTT broker, subscribing to '%s'", TOPIC)
+        log.info("Connected to the MQTT broker, subscribing to '%s' and '%s'", TOPIC, PONG_TOPIC)
         client.subscribe(TOPIC)
+        client.subscribe(PONG_TOPIC)
         broadcaster.publish({"type": "status", "status": "connected"})
     else:
         log.error("Connection failed: %s", reason_code)
@@ -105,11 +124,16 @@ def _on_disconnect(client, userdata, *args):
 
 
 def _on_message(client, userdata, msg):
-    bitmask = _parse_bitmask(msg.payload)
+    if msg.topic == PONG_TOPIC:
+        clock_sync.on_pong(msg.payload)
+        return
+
+    t1 = time.time()   # server receipt / classification time
+    bitmask, t0 = _parse_bitmask(msg.payload)
     recorder = current_session.get()
     if bitmask is None:
         log.warning("Uninterpretable payload: %r", msg.payload)
-        err = {"type": "raw_error", "timestamp": time.time(), "payload": repr(msg.payload)}
+        err = {"type": "raw_error", "timestamp": t1, "payload": repr(msg.payload)}
         if recorder is not None:
             recorder.record(err)
         broadcaster.publish(err)
@@ -144,9 +168,21 @@ def _on_message(client, userdata, msg):
         except Exception as exc:
             log.warning("Failed to publish haptic feedback: %s", exc)
 
+    # firmware->server latency, in milliseconds: needs a firmware "t0" AND a
+    # clock-offset estimate from ping/pong (see clock_sync.py) to be
+    # meaningful -- None (not 0) when either is missing, so the numbers in
+    # the report (latency_report.py) are never silently wrong.
+    t0_server_time = clock_sync.to_server_time(t0) if t0 is not None else None
+    publish_to_classify_ms = ((t1 - t0_server_time) * 1000.0
+                               if t0_server_time is not None else None)
+
     data = {
         "type": "event",
-        "timestamp": time.time(),
+        "timestamp": t1,
+        "t0": t0,
+        "t1": t1,
+        "publish_to_classify_ms": publish_to_classify_ms,
+        "rtt_ms": clock_sync.rtt_ms(),
         "bitmask": bitmask,
         "bitmask_bin": format(bitmask, "06b"),
         "faces": sorted(faces),
@@ -170,6 +206,18 @@ def _on_message(client, userdata, msg):
         broadcaster.publish(data)
 
 
+def _ping_loop(client):
+    """Publishes a ping every PING_INTERVAL_S so clock_sync accumulates RTT
+    (and, once the firmware echoes its own clock back on the pong, offset)
+    samples even between touch events."""
+    while True:
+        time.sleep(PING_INTERVAL_S)
+        try:
+            client.publish(PING_TOPIC, json.dumps(clock_sync.next_ping()))
+        except Exception as exc:
+            log.warning("Failed to publish ping: %s", exc)
+
+
 def start_mqtt_thread():
     def run():
         client = mqtt.Client(client_id="", transport="websockets", protocol=mqtt.MQTTv311)
@@ -179,6 +227,7 @@ def start_mqtt_thread():
         client.on_connect = _on_connect
         client.on_disconnect = _on_disconnect
         client.on_message = _on_message
+        threading.Thread(target=_ping_loop, args=(client,), daemon=True).start()
 
         while True:
             try:

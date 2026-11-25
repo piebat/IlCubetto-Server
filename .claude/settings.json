@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('mqtt_client.py'\\).read\\(\\)\\); ast.parse\\(open\\('clock_sync.py'\\).read\\(\\)\\)\")",
+      "Read(//Users/piebat/MyGoogleD/Cubetto-2026/Codice/server-app/IlCubetto-Server/.venv/bin/**)",
+      "Bash(python3 -m venv --clear .venv)",
+      "Bash(.venv/bin/python3 -V)",
+      "Bash(.venv/bin/pip install *)",
+      "Bash(python3 -c \"import app\")"
     ]
   }
 }

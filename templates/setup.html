@@ -25,9 +25,9 @@
 <body>
 <main>
   <h1>🧊 New test session</h1>
-  <p class="sub">Each tester performs 12 moves; 10 testers cover all 120 combinations.</p>
+  <p class="sub">Each tester performs all 16 symbols (pairs of consecutive rotations), in one of 12 fixed random orders.</p>
   <div class="panel">
-    <span class="badge">next: {{ user_id }} (round {{ round }}, slot {{ slot + 1 }}/10)</span>
+    <span class="badge">next: {{ user_id }} (round {{ round }}, order {{ slot + 1 }}/12)</span>
     <form method="post" action="/session/new">
       <label for="age">Age</label>
       <input type="number" id="age" name="age" min="0" max="120">

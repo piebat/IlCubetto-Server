@@ -17,7 +17,7 @@ import current_session
 import cube_algorithm as ca
 import user_registry
 from broadcaster import broadcaster
-from combination_plan import build_protocol_rows
+from symbol_plan import build_protocol_rows
 from generate_graph import build_graph
 from mqtt_client import calibrate_tracker, start_mqtt_thread
 from session_recorder import LOG_DIR, SessionRecorder
@@ -45,8 +45,8 @@ def index():
 
 @app.route("/setup")
 def setup():
-    round_, slot, user_id = user_registry.peek_next()
-    return render_template("setup.html", round=round_, slot=slot, user_id=user_id)
+    round_, order_index, user_id = user_registry.peek_next()
+    return render_template("setup.html", round=round_, slot=order_index, user_id=user_id)
 
 
 @app.route("/session/new", methods=["POST"])
@@ -55,16 +55,16 @@ def session_new():
     gender = request.form.get("gender", "").strip()
     notes = request.form.get("notes", "").strip()
 
-    round_, slot, user_id = user_registry.allocate_user()
+    round_, order_index, user_id = user_registry.allocate_user()
     user_dir = os.path.join(LOG_DIR, user_id)
     os.makedirs(user_dir, exist_ok=True)
 
     meta = {
-        "user_id": user_id, "round": round_, "slot": slot,
+        "user_id": user_id, "round": round_, "order_index": order_index,
         "age": age, "gender": gender, "notes": notes,
         "started_at": datetime.now().isoformat(timespec="seconds"),
     }
-    rows = build_protocol_rows(slot)
+    rows = build_protocol_rows(order_index)
     recorder = SessionRecorder(user_dir, rows, on_calibrate=calibrate_tracker, meta=meta)
     with open(recorder.meta_path, "w", encoding="utf-8") as fh:
         json.dump(meta, fh, indent=2)
@@ -129,6 +129,26 @@ def graph_data():
         "links": out_links,
         "move_descriptions": ca.MOVE_DESCRIPTIONS,
     })
+
+
+@app.route("/beacon", methods=["POST"])
+def beacon():
+    """Records when the browser actually rendered an event (t2), for the
+    classify->display leg of the latency measurement (see
+    latency_report.py). Matched to its event afterwards by t1 (the server
+    receipt/classify timestamp, unique per event), not by session cursor:
+    the beacon can arrive after the tester has already moved on."""
+    recorder = current_session.get()
+    if recorder is None:
+        return jsonify({"error": "no active session"}), 409
+    body = request.get_json(silent=True) or {}
+    try:
+        t1 = float(body["t1"])
+        t2 = float(body["t2"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "t1 and t2 (seconds) are required"}), 400
+    recorder.record_display(t1, t2)
+    return jsonify({"ok": True})
 
 
 @app.route("/protocol-progress")

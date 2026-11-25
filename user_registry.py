@@ -1,16 +1,16 @@
-"""Assigns auto-incremental user ids, cycling through 10 slots per round so
-that every complete round covers all 120 combinations (see
-combination_plan.py) exactly once across 10 testers. A new round starts
-automatically once slot 9 has been handed out, so the protocol can be
-re-run with later cohorts without manual reset.
+"""Assigns auto-incremental user ids, cycling through the N_ORDERS precomputed
+symbol orderings (see symbol_plan.py) so that across any N_ORDERS consecutive
+testers, every one of them gets a different order of the 16 symbols. A new
+round starts automatically once the last order has been handed out, so the
+protocol can be re-run with later cohorts without manual reset.
 
-Persisted in logs/registry.json: {"next_round": 1, "next_slot": 0}.
+Persisted in logs/registry.json: {"next_round": 1, "next_order": 0}.
 """
 import json
 import os
 import threading
 
-from combination_plan import N_SLOTS
+from symbol_plan import N_ORDERS
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(BASE_DIR, "logs")
@@ -21,13 +21,13 @@ _lock = threading.Lock()
 
 def _read():
     if not os.path.exists(REGISTRY_PATH):
-        return {"next_round": 1, "next_slot": 0}
+        return {"next_round": 1, "next_order": 0}
     try:
         with open(REGISTRY_PATH, encoding="utf-8") as fh:
             data = json.load(fh)
-        return {"next_round": int(data["next_round"]), "next_slot": int(data["next_slot"])}
+        return {"next_round": int(data["next_round"]), "next_order": int(data["next_order"])}
     except Exception:
-        return {"next_round": 1, "next_slot": 0}
+        return {"next_round": 1, "next_order": 0}
 
 
 def _write(state):
@@ -38,30 +38,31 @@ def _write(state):
     os.replace(tmp, REGISTRY_PATH)
 
 
-def user_id_for(round_: int, slot: int) -> str:
-    return f"user_r{round_}_{slot:02d}"
+def user_id_for(round_: int, order_index: int) -> str:
+    return f"user_r{round_}_{order_index:02d}"
 
 
 def peek_next():
-    """Round/slot/user_id that the NEXT allocate_user() call will hand out,
-    without consuming it."""
+    """Round/order_index/user_id that the NEXT allocate_user() call will hand
+    out, without consuming it."""
     with _lock:
         state = _read()
-    return state["next_round"], state["next_slot"], user_id_for(state["next_round"], state["next_slot"])
+    return state["next_round"], state["next_order"], user_id_for(state["next_round"], state["next_order"])
 
 
 def allocate_user():
-    """Returns (round, slot, user_id) and advances the registry so the next
-    call hands out the following slot (wrapping to a new round after 10)."""
+    """Returns (round, order_index, user_id) and advances the registry so the
+    next call hands out the following order (wrapping to a new round after
+    N_ORDERS)."""
     with _lock:
         state = _read()
-        round_, slot = state["next_round"], state["next_slot"]
+        round_, order_index = state["next_round"], state["next_order"]
 
-        next_slot = slot + 1
+        next_order = order_index + 1
         next_round = round_
-        if next_slot >= N_SLOTS:
-            next_slot = 0
+        if next_order >= N_ORDERS:
+            next_order = 0
             next_round = round_ + 1
-        _write({"next_round": next_round, "next_slot": next_slot})
+        _write({"next_round": next_round, "next_order": next_order})
 
-    return round_, slot, user_id_for(round_, slot)
+    return round_, order_index, user_id_for(round_, order_index)
