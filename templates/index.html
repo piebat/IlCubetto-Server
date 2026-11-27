@@ -68,6 +68,7 @@
   .todo.calibrating .mv { background:#3a2f1a; color:var(--warn); }
   .user-badge { font-size:12.5px; color:var(--muted); }
   .user-badge b { color:var(--text); }
+
 </style>
 </head>
 <body>
@@ -108,6 +109,7 @@
     <div class="btns">
       <button class="primary" id="btn-pause">⏸ Pause</button>
       <button id="btn-redo">↩ Redo this step</button>
+      <button id="btn-recalibrate">↻ Recalibrate</button>
       <button class="danger" id="btn-reset">⟲ Reset the test</button>
     </div>
   </div>
@@ -235,7 +237,8 @@ function renderProgress(p) {
 
   if (p.phase === 'calibrating') {
     todo.classList.remove('done-all');
-    document.getElementById('todo-move').textContent = '↻ ' + (p.calibration_move || 'tip_U+');
+    const calibMove = p.calibration_move || 'tip_U+';
+    document.getElementById('todo-move').textContent = '↻ ' + calibMove;
     document.getElementById('todo-instr').textContent = 'Turn the cube forward.';
     document.getElementById('todo-exp').textContent = p.recalibrating
       ? `A reading was lost: resynchronise first, then symbol ${done + 1} will be retried.`
@@ -258,16 +261,30 @@ function renderProgress(p) {
     }
   }
 
-  // outcome of the symbol just performed, to spot an error straight away
-  const last = p.last_step;
+  // immediate feedback on the move just read, BEFORE the symbol necessarily
+  // completes -- tells a mis-performed rotation (the tester turned the
+  // wrong way, and we know it with certainty) apart from a lost reading
+  // (a sensor fault: nothing is known about what the tester actually did,
+  // so the symbol is retried rather than scored).
   const el = document.getElementById('last-result');
-  if (last && last.detected_move1) {
-    const good = last.match === 'OK';
-    el.innerHTML = `step ${last.step}: detected <code>${last.detected_move1} + ${last.detected_move2}</code> ` +
-      `<span class="${good ? 'ok' : 'ko'}">${last.match}</span>` +
-      (good ? '' : ` (expected <code>${last.move1} + ${last.move2}</code>)`);
+  const lr = p.last_live_result;
+  if (lr && lr.kind === 'released') {
+    el.innerHTML = `<span class="ko">cube released</span> — it may have moved while not held; recalibrating, this symbol will be retried.`;
+  } else if (lr && lr.kind === 'lost_reading') {
+    el.innerHTML = `<span class="ko">reading lost</span> — a step was missed or grip was lost; recalibrating, this symbol will be retried.`;
+  } else if (lr && lr.kind === 'wrong_move') {
+    el.innerHTML = `<span class="ko">wrong move</span>: detected <code>${lr.detected}</code>, expected <code>${lr.expected}</code>.`;
   } else {
-    el.textContent = '';
+    // outcome of the symbol just completed, once both moves are in
+    const last = p.last_step;
+    if (last && last.detected_move1) {
+      const good = last.match === 'OK';
+      el.innerHTML = `step ${last.step}: detected <code>${last.detected_move1} + ${last.detected_move2}</code> ` +
+        `<span class="${good ? 'ok' : 'ko'}">${last.match}</span>` +
+        (good ? '' : ` (expected <code>${last.move1} + ${last.move2}</code>)`);
+    } else {
+      el.textContent = '';
+    }
   }
 }
 
@@ -282,6 +299,7 @@ async function control(action) {
 
 document.getElementById('btn-pause').onclick = () => control(paused ? 'resume' : 'pause');
 document.getElementById('btn-redo').onclick = () => control('redo');
+document.getElementById('btn-recalibrate').onclick = () => control('recalibrate');
 document.getElementById('btn-reset').onclick = () => {
   // destructive reset: clears every column already filled in
   const msg = "Reset the test? All the results recorded in the CSV will be deleted.\n" +

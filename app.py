@@ -162,7 +162,7 @@ def protocol_progress():
 
 @app.route("/protocol-control/<action>", methods=["POST"])
 def protocol_control(action):
-    """Test panel commands: pause, resume, redo step, reset.
+    """Test panel commands: pause, resume, redo step, recalibrate, reset.
 
     The result is also republished on the stream, so any other dashboard tabs
     that are open stay in sync.
@@ -175,6 +175,7 @@ def protocol_control(action):
         "pause": lambda: recorder.set_paused(True),
         "resume": lambda: recorder.set_paused(False),
         "redo": recorder.redo_step,
+        "recalibrate": recorder.recalibrate,
         "reset": recorder.reset,
     }
     if action not in actions:

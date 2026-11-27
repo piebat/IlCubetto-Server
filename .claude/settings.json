@@ -7,7 +7,11 @@
       "Bash(python3 -m venv --clear .venv)",
       "Bash(.venv/bin/python3 -V)",
       "Bash(.venv/bin/pip install *)",
-      "Bash(python3 -c \"import app\")"
+      "Bash(python3 -c \"import app\")",
+      "Bash(rm -rf /private/tmp/claude-501/-Users-piebat-MyGoogleD-Cubetto-2026-Codice-server-app-IlCubetto-Server/ef6dbeee-6f60-43d1-9ca1-89a49134ef3e/scratchpad/*)"
+    ],
+    "additionalDirectories": [
+      "/private/tmp/claude-501/-Users-piebat-MyGoogleD-Cubetto-2026-Codice-server-app-IlCubetto-Server/ef6dbeee-6f60-43d1-9ca1-89a49134ef3e/scratchpad"
     ]
   }
 }

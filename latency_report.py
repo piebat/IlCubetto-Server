@@ -1,5 +1,7 @@
 """Reports the median and 95th percentile latency across the three legs of
-the pipeline, over the 120-rotation session logs (logs/<user_id>/session_*.jsonl):
+the pipeline, over the per-session logs (logs/<user_id>/session_*.jsonl) of
+the 16-symbol test (each symbol = 2 consecutive elementary rotations, see
+symbol_plan.py):
 
   publish_to_classify_ms  -- ESP32 publish (t0, corrected for clock offset
                               via clock_sync.py's ping/pong) to server
@@ -17,6 +19,14 @@ Only "event" lines with ok=True are counted (ambiguous/invalid readings
 were never classified as a move, so they have no meaningful end-to-end
 latency); "display" lines are matched to them by t1 and are not counted on
 their own.
+
+Each "event" line also carries "rtt_ms", the ping/pong round-trip time
+clock_sync.py had measured at that instant: publish_to_classify_ms relies on
+the symmetric-delay assumption (the firmware clock reads "now" at the
+midpoint of the round trip -- see clock_sync.py's docstring), so its own
+uncertainty cannot be smaller than half that round trip. The report's
+"uncertainty bound" line is exactly that: half the median of all per-event
+rtt_ms samples across the session(s) being reported on.
 
 Usage:
     python3 latency_report.py [logs/<user_id>/session_*.jsonl ...]
@@ -68,7 +78,7 @@ def _load(paths):
                 elif obj.get("type") == "event" and obj.get("ok"):
                     events.append(obj)
 
-    publish_to_classify, classify_to_display, end_to_end = [], [], []
+    publish_to_classify, classify_to_display, end_to_end, rtts = [], [], [], []
     for ev in events:
         p2c = ev.get("publish_to_classify_ms")
         c2d = display_by_t1.get(ev.get("t1"))
@@ -78,8 +88,10 @@ def _load(paths):
             classify_to_display.append(c2d)
         if p2c is not None and c2d is not None:
             end_to_end.append(p2c + c2d)
+        if ev.get("rtt_ms") is not None:
+            rtts.append(ev["rtt_ms"])
 
-    return len(events), publish_to_classify, classify_to_display, end_to_end
+    return len(events), publish_to_classify, classify_to_display, end_to_end, rtts
 
 
 def _report_leg(name, values, total_events):
@@ -96,9 +108,17 @@ def main(argv):
     if not paths:
         sys.exit(f"No session logs found under {LOG_DIR}")
 
-    total_events, p2c, c2d, e2e = _load(paths)
+    total_events, p2c, c2d, e2e, rtts = _load(paths)
     print(f"{len(paths)} log file(s), {total_events} valid (ok=True) events")
     _report_leg("publish -> classify (firmware to server)", p2c, total_events)
+    if p2c:
+        rtt_median = _median(rtts) if rtts else None
+        if rtt_median is not None:
+            print(f"  The uncertainty of this estimate is bounded by half the RTT,")
+            print(f"  whose median over the session was {rtt_median:5.1f} ms "
+                  f"(uncertainty bound: {rtt_median / 2:5.1f} ms).")
+        else:
+            print("  (no ping/pong RTT samples -- uncertainty bound unavailable)")
     _report_leg("classify -> display (server to browser)", c2d, total_events)
     _report_leg("end-to-end (publish -> display)", e2e, total_events)
 

@@ -34,10 +34,11 @@ tester is asked to perform a fixed move ('tip_U+', "turn the cube forward")
 whose outcome, combined with the state observed right before it, lets
 CubeTracker.calibrate() resolve the ambiguity.
 
-If an ambiguous reading occurs mid-symbol (a missed step or a loss of
-grip), the current symbol's partially-recorded moves are discarded and the
-tester is asked to repeat the calibration rotation; once recalibrated, the
-SAME symbol (not the next one) is retried.
+If an ambiguous reading occurs mid-symbol (a missed step), or the cube is
+released/dropped (every finger comes off it, so it could have been moved
+without being observed), the current symbol's partially-recorded moves are
+discarded and the tester is asked to repeat the calibration rotation; once
+recalibrated, the SAME symbol (not the next one) is retried.
 """
 import csv
 import json
@@ -100,6 +101,9 @@ class SessionRecorder:
         self._shadow = ca.CubeTracker()
         # ambiguous readings discarded so far (sensor faults, not steps)
         self._ambiguous_count = 0
+        # most recent per-event outcome (see `_advance_symbol`/`record`):
+        # {"kind": "ok"|"wrong_move"|"lost_reading", ...}, for live feedback
+        self._last_live_result = None
 
         os.makedirs(self.user_dir, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -132,45 +136,57 @@ class SessionRecorder:
             self._event_seq += 1
             seq = self._event_seq
 
-            faces = data.get("faces")
-            shadow_ev = self._shadow.update(set(faces) if isinstance(faces, list) else set())
+            faces_set = set(faces) if isinstance((faces := data.get("faces")), list) else set()
+            shadow_ev = self._shadow.update(faces_set)
+            released = len(faces_set) == 0
 
             step = None
             match = None
             calib_result = None
+            live_result = None  # per-event feedback, distinct from `match` (set only when a symbol completes)
             if not self._paused:
                 if self._phase == "calibrating":
                     calib_result = self._advance_calibration(shadow_ev)
                 elif self._phase == "running":
-                    if shadow_ev.ambiguous:
-                        # An ambiguous jump means confidence in the tracked
-                        # orientation is lost (a missed step or a loss of
-                        # grip): discard whatever was recorded so far for the
+                    if shadow_ev.ambiguous or released:
+                        # Either the sensors missed an intermediate reading
+                        # (an ambiguous jump), or every finger came off the
+                        # cube (a release/drop): in both cases confidence in
+                        # the tracked orientation is lost -- the cube could
+                        # have been moved while nothing was observing it.
+                        # Discard whatever was recorded so far for the
                         # CURRENT symbol, recalibrate, then retry the same
-                        # symbol -- it is not advanced past.
+                        # symbol -- it is not advanced past. This is a sensor
+                        # fault, not a wrong move: the tester is not at fault
+                        # and nothing can be said about which move they made.
                         self._ambiguous_count += 1
                         self._discard_current_symbol()
                         self._phase = "calibrating"
                         self._calib_prev_state = None
-                        log.warning("ambiguous reading discarded (step %s): recalibrate",
+                        live_result = {"kind": "released" if released else "lost_reading"}
+                        log.warning("%s (step %s): recalibrate",
+                                    "cube released" if released else "ambiguous reading discarded",
                                     self._rows[self._cursor].get("step")
                                     if self._cursor < len(self._rows) else "-")
                     else:
                         usable = (bool(data.get("ok")) and data.get("move")
                                   and self._cursor < len(self._rows))
                         if usable:
-                            step, match = self._advance_symbol(data)
+                            step, match, live_result = self._advance_symbol(data)
 
             self._write_log({
                 **data,
                 "seq": seq,
                 "protocol_step": step,
                 "protocol_match": match,
+                "live_result": live_result,
                 "phase": self._phase,
                 "calibration": calib_result,
                 "paused": self._paused,
                 "recorded_at": datetime.now().isoformat(timespec="milliseconds"),
             })
+            if live_result is not None:
+                self._last_live_result = live_result
 
     def record_display(self, t1: float, t2: float):
         """Called from the /beacon route with t1 (server receipt/classify
@@ -224,15 +240,26 @@ class SessionRecorder:
     def _advance_symbol(self, data: dict):
         """Fills in the next open slot (move1, then move2) of the current
         row from this event. Once both are filled, scores the row and moves
-        the cursor to the next symbol. Returns (step, match) -- match is
-        None until the second move of the pair completes the row."""
+        the cursor to the next symbol. Returns (step, match, live_result):
+        match is None until the second move of the pair completes the row;
+        live_result reports, for THIS event, whether the move just detected
+        was the one expected -- distinct from `match`, which only speaks for
+        the whole two-move symbol, and from the "lost_reading" sensor-fault
+        case (handled by the caller before this is reached), since here the
+        tracker is calibrated and the move is known with certainty: a wrong
+        move is a mis-performed rotation, not an ambiguous reading."""
         row = self._rows[self._cursor]
         move = data.get("move") or ""
+
+        def _live_result(detected, expected):
+            if detected == expected:
+                return {"kind": "ok"}
+            return {"kind": "wrong_move", "expected": expected, "detected": detected}
 
         if not row["detected_move1"]:
             row["detected_move1"] = move
             self._write_protocol()
-            return row.get("step"), None
+            return row.get("step"), None, _live_result(move, row["move1"])
 
         row["detected_move2"] = move
         ok = (row["detected_move1"] == row["move1"]) and (row["detected_move2"] == row["move2"])
@@ -240,12 +267,13 @@ class SessionRecorder:
 
         step = row.get("step")
         match = row["match"]
+        live_result = _live_result(move, row["move2"])
         self._cursor += 1
         if self._cursor >= len(self._rows):
             self._phase = "done"
             self._write_meta_ended()
         self._write_protocol()
-        return step, match
+        return step, match, live_result
 
     def _write_meta_ended(self):
         if not self.meta:
@@ -293,9 +321,36 @@ class SessionRecorder:
             row = self._rows[self._cursor]
             for col in FILLED_COLS:
                 row[col] = ""
+            self._last_live_result = None
             self._write_protocol()
             self._write_log({"type": "control", "action": "redo_step",
                              "step": row.get("step"), "cursor": self._cursor,
+                             "recorded_at": datetime.now().isoformat(timespec="milliseconds")})
+            return self._progress_locked()
+
+    def recalibrate(self):
+        """Tester- or operator-requested calibration, e.g. after setting the
+        cube down deliberately or if the live display looks wrong, without
+        waiting for a sensor fault to trigger it automatically.
+
+        Unlike `reset()`, the protocol cursor does not move: only the
+        CURRENT symbol's partially-recorded moves are discarded (they were
+        read under the calibration now being redone and would no longer be
+        trustworthy), then calibration restarts and the same symbol is
+        retried once it completes -- the same recovery as an automatic
+        ambiguous-reading or cube-release event, just operator-triggered.
+        A no-op while already calibrating."""
+        with self._lock:
+            if self._phase != "running":
+                return self._progress_locked()
+            self._discard_current_symbol()
+            self._phase = "calibrating"
+            self._calib_prev_state = None
+            self._last_live_result = None
+            self._write_log({"type": "control", "action": "recalibrate",
+                             "step": self._rows[self._cursor].get("step")
+                                     if self._cursor < len(self._rows) else None,
+                             "cursor": self._cursor,
                              "recorded_at": datetime.now().isoformat(timespec="milliseconds")})
             return self._progress_locked()
 
@@ -310,6 +365,7 @@ class SessionRecorder:
             self._cursor = 0
             self._paused = False
             self._ambiguous_count = 0
+            self._last_live_result = None
             self._phase = "calibrating" if self._rows else "done"
             self._calib_prev_state = None
             # The shadow tracker is NOT cleared: the cube has not moved, and
@@ -346,4 +402,5 @@ class SessionRecorder:
             "next_step": current,
             "last_step": self._rows[done - 1] if done > 0 else None,
             "discarded": self._ambiguous_count,
+            "last_live_result": self._last_live_result,
         }
