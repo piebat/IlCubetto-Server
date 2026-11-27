@@ -16,6 +16,7 @@ hardcoded here, so this file is safe to publish/share.
 import json
 import logging
 import os
+import ssl
 import sys
 import threading
 import time
@@ -222,7 +223,13 @@ def start_mqtt_thread():
     def run():
         client = mqtt.Client(client_id="", transport="websockets", protocol=mqtt.MQTTv311)
         client.ws_set_options(path=BROKER_WS_PATH)
-        client.tls_set(ca_certs=BROKER_CA_CERT)
+        # tls_version passed explicitly: paho-mqtt 1.6.1's own default
+        # unconditionally evaluates the now-removed ssl.PROTOCOL_TLSv1_2
+        # before falling back to PROTOCOL_TLS on newer Python, crashing on
+        # any Python version where PROTOCOL_TLSv1_2 no longer exists.
+        # PROTOCOL_TLS_CLIENT negotiates the highest version both ends
+        # support and works the same way the broken default intended to.
+        client.tls_set(ca_certs=BROKER_CA_CERT, tls_version=ssl.PROTOCOL_TLS_CLIENT)
         client.username_pw_set(BROKER_USERNAME, BROKER_PASSWORD)
         client.on_connect = _on_connect
         client.on_disconnect = _on_disconnect

@@ -4,12 +4,25 @@ dashboard via Server-Sent Events (SSE).
 
 Local start-up:
     pip install -r requirements.txt
+    cp .env.example .env   # fill in real values
     python app.py
 then open http://127.0.0.1:5001
+
+.env is loaded automatically (see below) -- no need to export it by hand.
 """
 import json
+import logging
 import os
 from datetime import datetime
+
+from dotenv import load_dotenv
+
+# Must run before importing mqtt_client (and anything that imports it):
+# that module reads its broker configuration from the environment at
+# import time via `_required_env`, so .env has to be loaded first. Silent,
+# no-op if .env is absent (e.g. in production where real env vars are set
+# some other way) -- never overrides a variable already set externally.
+load_dotenv()
 
 from flask import Flask, Response, jsonify, redirect, render_template, request, stream_with_context, url_for
 
@@ -22,9 +35,11 @@ from generate_graph import build_graph
 from mqtt_client import calibrate_tracker, start_mqtt_thread
 from session_recorder import LOG_DIR, SessionRecorder
 
+log = logging.getLogger("app")
 app = Flask(__name__)
 
 _mqtt_thread_started = False
+_webcam_thread_started = False
 
 
 def _ensure_mqtt_started():
@@ -34,9 +49,26 @@ def _ensure_mqtt_started():
         _mqtt_thread_started = True
 
 
+def _ensure_webcam_started():
+    """Optional: saves a short clip around every rotation error, for later
+    review. Off by default (set CUBETTO_ENABLE_WEBCAM=1) since it needs
+    opencv-python and a camera, neither of which the MQTT-only setup
+    requires."""
+    global _webcam_thread_started
+    if _webcam_thread_started or os.environ.get("CUBETTO_ENABLE_WEBCAM") != "1":
+        return
+    try:
+        from webcam_recorder import start_webcam_recorder_thread
+        start_webcam_recorder_thread()
+    except Exception:
+        log.exception("Failed to start the webcam recorder; continuing without it")
+    _webcam_thread_started = True
+
+
 @app.route("/")
 def index():
     _ensure_mqtt_started()
+    _ensure_webcam_started()
     recorder = current_session.get()
     if recorder is None:
         return redirect(url_for("setup"))

@@ -163,7 +163,10 @@ class SessionRecorder:
                         self._discard_current_symbol()
                         self._phase = "calibrating"
                         self._calib_prev_state = None
-                        live_result = {"kind": "released" if released else "lost_reading"}
+                        current_step = (self._rows[self._cursor].get("step")
+                                         if self._cursor < len(self._rows) else None)
+                        live_result = {"kind": "released" if released else "lost_reading",
+                                        "step": current_step}
                         log.warning("%s (step %s): recalibrate",
                                     "cube released" if released else "ambiguous reading discarded",
                                     self._rows[self._cursor].get("step")
@@ -250,11 +253,12 @@ class SessionRecorder:
         move is a mis-performed rotation, not an ambiguous reading."""
         row = self._rows[self._cursor]
         move = data.get("move") or ""
+        row_step = row.get("step")
 
         def _live_result(detected, expected):
             if detected == expected:
-                return {"kind": "ok"}
-            return {"kind": "wrong_move", "expected": expected, "detected": detected}
+                return {"kind": "ok", "step": row_step}
+            return {"kind": "wrong_move", "expected": expected, "detected": detected, "step": row_step}
 
         if not row["detected_move1"]:
             row["detected_move1"] = move
